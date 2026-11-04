@@ -542,3 +542,78 @@ html.anim .stat, html.anim .panel { animation: none; }
 .card .meta { flex-wrap: wrap; gap: 2px 8px; }
 .card .price { white-space: nowrap; }
 .card .meta span:last-child { font-size: 11px; }
+
+/* ---------- Ficha de prenda ---------- */
+.sheet { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; }
+.sheet[hidden] { display: none; }
+.sheet-backdrop {
+  position: absolute; inset: 0; background: rgba(4, 4, 6, .6);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  animation: fade-in .3s var(--ease) both;
+}
+.sheet-panel {
+  position: relative; width: min(880px, calc(100vw - 48px)); max-height: calc(100svh - 48px); overflow: auto;
+  display: grid; grid-template-columns: 1fr 1fr;
+  background: var(--panel-solid); border: 1px solid var(--line-strong); border-radius: 28px;
+  box-shadow: 0 40px 120px -30px rgba(0, 0, 0, .9);
+  animation: sheet-in .55s var(--ease) both;
+}
+.sheet.closing .sheet-panel { animation: sheet-out .3s var(--ease) both; }
+.sheet.closing .sheet-backdrop { animation: fade-out .3s var(--ease) both; }
+.sheet-media { position: relative; background: #1a1a21; min-height: 100%; }
+.sheet-media img { width: 100%; height: 100%; object-fit: cover; display: block; aspect-ratio: 4 / 5; }
+.sheet-body { padding: 28px 26px 26px; display: flex; flex-direction: column; gap: 12px; }
+.sheet-event {
+  margin: 0; align-self: flex-start; padding: 6px 12px; border-radius: 999px;
+  font: 700 12px var(--display); letter-spacing: .08em; text-transform: uppercase;
+  background: rgba(61, 220, 132, .12); color: var(--ok); box-shadow: inset 0 0 0 1px rgba(61, 220, 132, .4);
+}
+.sheet-event:empty { display: none; }
+.sheet-event.for_you { background: rgba(232, 255, 58, .1); color: var(--accent); box-shadow: inset 0 0 0 1px rgba(232, 255, 58, .4); }
+.sheet-title { margin: 0; font: 700 clamp(22px, 3vw, 30px)/1.1 var(--display); text-transform: uppercase; letter-spacing: -.01em; }
+.sheet-why { margin: 0; color: var(--accent); font-size: 14px; }
+.sheet-price { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.sheet-price b { font: 700 28px var(--display); }
+.sheet-price span { color: var(--muted); font-size: 13px; }
+.sheet-sizes .size { font-size: 13px; padding: 6px 10px; border-radius: 9px; }
+.sheet-rate { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 13px; }
+.sheet-rate .stars button { font-size: 28px; }
+.sheet-cta {
+  margin-top: auto; display: flex; align-items: center; justify-content: center; height: 52px; border-radius: 16px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #0b0b0d; text-decoration: none;
+  font: 700 16px "Inter", sans-serif; box-shadow: 0 10px 30px -10px rgba(232, 255, 58, .6);
+  transition: transform .2s var(--ease);
+}
+.sheet-cta:active { transform: scale(.97); }
+.sheet-close {
+  position: absolute; top: 14px; right: 14px; z-index: 2; width: 38px; height: 38px; border-radius: 50%;
+  border: 0; background: rgba(8, 8, 11, .65); color: var(--text); font-size: 15px; cursor: pointer;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.sheet-grip { display: none; }
+.event { cursor: pointer; transition: background .2s; }
+@media (hover: hover) { .event:hover { background: rgba(255, 255, 255, .06); } }
+.card.spot { box-shadow: 0 0 0 2px var(--accent), 0 0 40px rgba(232, 255, 58, .35); }
+
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes sheet-in { from { opacity: 0; transform: translateY(40px) scale(.96); } }
+@keyframes sheet-out { to { opacity: 0; transform: translateY(30px) scale(.97); } }
+
+/* En móvil, hoja que sube desde abajo */
+@media (max-width: 720px) {
+  .sheet { place-items: end stretch; }
+  .sheet-panel {
+    width: 100%; max-height: 92svh; grid-template-columns: 1fr; border-radius: 26px 26px 0 0;
+    padding-bottom: var(--safe-b); animation-name: sheet-up;
+  }
+  .sheet.closing .sheet-panel { animation-name: sheet-down; }
+  .sheet-media img { aspect-ratio: 1; }
+  .sheet-grip {
+    display: block; position: absolute; top: 8px; left: 50%; z-index: 2; width: 42px; height: 5px; margin-left: -21px;
+    border-radius: 3px; background: rgba(255, 255, 255, .5);
+  }
+  .sheet-body { padding: 20px 18px 22px; }
+}
+@keyframes sheet-up { from { transform: translateY(100%); } }
+@keyframes sheet-down { to { transform: translateY(100%); } }

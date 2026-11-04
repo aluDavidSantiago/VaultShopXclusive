@@ -356,7 +356,7 @@ function renderProducts({ animate = false } = {}) {
 
   $("products").innerHTML = list.length
     ? list.map(({ p, pred }, i) => `
-      <div class="card ${p.available ? "" : "out"} ${exclusiveScore(p) ? "excl" : ""} ${animate && motion ? "pre" : ""}" style="--d:${i % 4}">
+      <div class="card ${p.available ? "" : "out"} ${exclusiveScore(p) ? "excl" : ""} ${animate && motion ? "pre" : ""}" style="--d:${i % 4}" data-doc="${esc(p.docId)}">
         <a href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener" class="img-link">
           ${p.image ? `<img src="${esc(thumb(p.image))}" alt="" loading="lazy" decoding="async" class="loading" onload="this.classList.remove('loading')" onerror="this.classList.remove('loading')">` : ""}
           ${pred !== null && pred >= NOTIFY_THRESHOLD ? `<span class="for-you">✨ ${pred.toFixed(1)}★</span>` : ""}
@@ -396,9 +396,9 @@ function renderTaste() {
 function renderEvents() {
   $("events").innerHTML = state.events.length
     ? state.events.map((e) => `
-      <li class="event">
+      <li class="event ${esc(e.type)}" data-doc="${esc(`${e.store_id}_${e.product_id}`)}" data-type="${esc(e.type)}">
         <span class="kind ${esc(e.type)}">${esc(EVENT_LABELS[e.type] || e.type)}</span>
-        <a href="${esc(safeUrl(e.url))}" target="_blank" rel="noopener">${esc(e.title)}</a>
+        <a href="${esc(safeUrl(e.url))}" target="_blank" rel="noopener" data-sheet>${esc(e.title)}</a>
         ${e.detail ? `<div class="detail">${esc(e.detail)}</div>` : ""}
         <div class="tags">${tagsHtml(e.exclusivity)}</div>
         <time>${esc(timeAgo(toDate(e.ts)))}</time>
@@ -442,6 +442,7 @@ onSnapshot(collection(db, "products"), (snap) => {
   renderStats();
   renderHero();
   renderFeatured();
+  if (first) openFromUrl();
 }, onError);
 
 onSnapshot(query(collection(db, "events"), orderBy("ts", "desc"), limit(50)), (snap) => {
@@ -500,6 +501,12 @@ onAuthStateChanged(auth, (user) => {
     if (profileReady() && !state.sortChosen) $("sort").value = "for-you";
     // La primera vez hay que pintar todo; después basta con repintar las estrellas
     // (salvo en "Para ti" / "Por valorar", donde el orden depende de las valoraciones).
+    // Si la ficha se abrió antes de iniciar sesión, le faltan las estrellas.
+    const openDoc = !$("sheet").hidden && document.querySelector(".card.spot")?.dataset.doc;
+    if (firstLoad && openDoc) {
+      const p = state.products.find((x) => x.docId === openDoc);
+      if (p) $("sheet-stars").innerHTML = starsHtml(p);
+    }
     if (firstLoad || ["for-you", "unrated"].includes($("sort").value)) renderProducts({ animate: firstLoad });
     else paintStars();
     renderFeatured();
@@ -513,7 +520,7 @@ signInAnonymously(auth).catch((err) => {
 });
 $("sort").addEventListener("change", () => { state.sortChosen = true; });
 
-$("products").addEventListener("click", async (ev) => {
+document.addEventListener("click", async (ev) => {
   const btn = ev.target.closest("button[data-rate]");
   if (!btn || !state.uid) return;
   const docId = btn.dataset.doc;
@@ -541,6 +548,84 @@ $("products").addEventListener("click", async (ev) => {
     toast("No se pudo guardar: " + err.message);
   }
 });
+
+// ---------- Ficha de prenda (se abre desde la notificación o la actividad) ----------
+
+const SHEET_EVENTS = { ...EVENT_LABELS, for_you: "Te puede gustar" };
+const SHEET_ICONS = { new_product: "🆕", restock: "🔁", variant_restock: "📏", sold_out: "❌", variant_sold_out: "⚠️", price_change: "💸", for_you: "✨" };
+
+function openSheet(docId, eventType = "") {
+  const p = state.products.find((x) => x.docId === docId);
+  if (!p) { toast("Esta prenda ya no está en el catálogo"); return; }
+  const last = state.events.find((e) => `${e.store_id}_${e.product_id}` === docId && (!eventType || e.type === eventType));
+  const type = eventType || last?.type || "";
+
+  $("sheet-img").src = p.image ? `${p.image}${p.image.includes("?") ? "&" : "?"}width=900` : "";
+  const ev = $("sheet-event");
+  ev.className = `sheet-event ${esc(type)}`;
+  ev.textContent = type ? `${SHEET_ICONS[type] || ""} ${SHEET_EVENTS[type] || type}${last?.ts ? " · " + timeAgo(toDate(last.ts)) : ""}` : "";
+  $("sheet-tags").innerHTML = tagsHtml(p.exclusivity);
+  $("sheet-title").textContent = p.title;
+
+  const why = $("sheet-why");
+  const detail = last?.detail || "";
+  let whyText = detail;
+  if (profileReady()) {
+    buildModel();
+    const s = predict(p);
+    if (s >= NOTIFY_THRESHOLD) whyText = `✨ Nota prevista para ti: ${s.toFixed(1)}★` + (detail ? ` · ${detail}` : "");
+  }
+  why.hidden = !whyText;
+  why.textContent = whyText;
+
+  const sizes = p.variants || [];
+  const avail = sizes.filter((v) => v.available).length;
+  $("sheet-price").textContent = `${Number(p.min_price || 0).toFixed(2)} €`;
+  $("sheet-stock").textContent = !p.available ? "Agotado"
+    : sizes.length === 1 ? "Disponible"
+    : `${avail} de ${sizes.length} tallas disponibles`;
+  $("sheet-sizes").innerHTML = sizes.map((v) => `<span class="size ${v.available ? "on" : "off"}">${esc(v.title)}</span>`).join("");
+  $("sheet-stars").innerHTML = state.uid ? starsHtml(p) : "";
+  $("sheet-cta").href = safeUrl(p.url);
+
+  const sheet = $("sheet");
+  sheet.classList.remove("closing");
+  sheet.hidden = false;
+  document.body.style.overflow = "hidden";
+
+  // Resalta la prenda en el catálogo para encontrarla al cerrar.
+  document.querySelectorAll(".card.spot").forEach((c) => c.classList.remove("spot"));
+  document.querySelector(`.card[data-doc="${CSS.escape(docId)}"]`)?.classList.add("spot");
+}
+
+function closeSheet() {
+  const sheet = $("sheet");
+  if (sheet.hidden || sheet.classList.contains("closing")) return;
+  sheet.classList.add("closing");
+  setTimeout(() => { sheet.hidden = true; sheet.classList.remove("closing"); document.body.style.overflow = ""; }, 280);
+}
+
+$("sheet").addEventListener("click", (ev) => { if (ev.target.closest("[data-close]")) closeSheet(); });
+addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeSheet(); });
+
+$("events").addEventListener("click", (ev) => {
+  const li = ev.target.closest(".event[data-doc]");
+  if (!li) return;
+  ev.preventDefault(); // el enlace del título abre la ficha, no la tienda
+  openSheet(li.dataset.doc, li.dataset.type);
+});
+
+// Enlaces de las notificaciones: ?p=<prenda>&e=<evento> abre su ficha; ?view=activity, la actividad.
+function openFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const docId = params.get("p");
+  const view = params.get("view");
+  if (!docId && !view) return;
+  history.replaceState(null, "", location.pathname); // que al recargar no se vuelva a abrir
+  if (docId) setTimeout(() => openSheet(docId, params.get("e") || ""), motion ? 350 : 0);
+  else if (view === "activity") setTimeout(() => $("feed").scrollIntoView({ behavior: "smooth", block: "start" }), 400);
+}
+
 
 // ---------- Notificaciones push (Firebase Cloud Messaging) ----------
 

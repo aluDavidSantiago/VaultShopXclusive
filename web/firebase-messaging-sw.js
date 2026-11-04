@@ -29,10 +29,19 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(fetch(req, { cache: "no-cache" }).catch(() => caches.match(req)));
 });
 
-// Notificaciones que muestra la propia web cuando está abierta (ver app.js).
+// Notificaciones que muestra la propia web cuando está abierta (ver app.js):
+// si la app ya está abierta, la lleva a la prenda; si no, la abre.
 self.addEventListener("notificationclick", (event) => {
   const url = event.notification.data?.url;
   if (!url) return;
   event.notification.close();
-  event.waitUntil(clients.openWindow(url));
+  event.waitUntil((async () => {
+    const wins = await clients.matchAll({ type: "window", includeUncontrolled: true });
+    const win = wins.find((w) => new URL(w.url).origin === self.location.origin);
+    if (win) {
+      await win.navigate(url).catch(() => {});
+      return win.focus();
+    }
+    return clients.openWindow(url);
+  })());
 });

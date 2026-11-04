@@ -123,6 +123,26 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <!-- Ficha de prenda: se abre al tocar una notificación o un elemento de la actividad -->
+  <div class="sheet" id="sheet" hidden>
+    <div class="sheet-backdrop" data-close></div>
+    <article class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <button type="button" class="sheet-close" data-close aria-label="Cerrar">✕</button>
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <div class="sheet-media"><img id="sheet-img" alt=""></div>
+      <div class="sheet-body">
+        <p class="sheet-event" id="sheet-event"></p>
+        <div class="tags" id="sheet-tags"></div>
+        <h3 class="sheet-title" id="sheet-title"></h3>
+        <p class="sheet-why" id="sheet-why" hidden></p>
+        <div class="sheet-price"><b id="sheet-price"></b><span id="sheet-stock"></span></div>
+        <div class="sizes sheet-sizes" id="sheet-sizes"></div>
+        <div class="sheet-rate"><span>Tu valoración</span><div id="sheet-stars"></div></div>
+        <a class="sheet-cta" id="sheet-cta" target="_blank" rel="noopener">Ver en la tienda ↗</a>
+      </div>
+    </article>
+  </div>
+
   <script type="module" src="app.js?v=__BUILD__"></script>
 </body>
 </html>

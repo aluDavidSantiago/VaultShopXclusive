@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from urllib.parse import quote
 from dataclasses import dataclass
 
 from monitor.classifier import classify
@@ -33,6 +34,14 @@ DASHBOARD_URL = "https://aludavidsantiago.github.io/VaultShopXclusive/"
 ICON_URL = DASHBOARD_URL + "icon-192.png"
 
 NOTIFY_TYPES = {"new_product", "restock", "variant_restock"}
+
+
+def app_link(store_id: str, product_id: str, event_type: str = "") -> str:
+    """Enlace que abre la app en la ficha de la prenda (ver `openFromUrl` en web/app.js)."""
+    return f"{DASHBOARD_URL}?p={quote(f'{store_id}_{product_id}')}" + (f"&e={quote(event_type)}" if event_type else "")
+
+
+ACTIVITY_LINK = DASHBOARD_URL + "?view=activity"
 EXCLUSIVE_LABELS = {"vault", "limited", "special_finish", "collab"}
 MAX_NOTIFICATIONS = 5  # por usuario y ciclo; si hay más, se manda un resumen
 
@@ -126,8 +135,12 @@ class PushNotifier:
 
     # --- envío ---
 
-    def send(self, title: str, body: str, link: str = DASHBOARD_URL, image: str = "", tokens: list[str] | None = None) -> int:
-        """Envía a `tokens` (o a todos). Devuelve cuántos dispositivos lo recibieron."""
+    def send(self, title: str, body: str, link: str = DASHBOARD_URL, image: str = "", tokens: list[str] | None = None,
+             tag: str = "") -> int:
+        """Envía a `tokens` (o a todos). Devuelve cuántos dispositivos lo recibieron.
+
+        `tag` agrupa: una notificación nueva con el mismo tag sustituye a la anterior (y vuelve a sonar).
+        """
         m = self.messaging
         if tokens is None:
             tokens = [t for ts in self.subscribers().values() for t in ts]
@@ -137,7 +150,10 @@ class PushNotifier:
             message = m.MulticastMessage(
                 tokens=batch,
                 webpush=m.WebpushConfig(
-                    notification=m.WebpushNotification(title=title, body=body, icon=ICON_URL, image=image or None),
+                    notification=m.WebpushNotification(
+                        title=title, body=body, icon=ICON_URL, image=image or None,
+                        tag=tag or None, renotify=True if tag else None,
+                    ),
                     fcm_options=m.WebpushFCMOptions(link=link if link.startswith("https://") else DASHBOARD_URL),
                 ),
             )
@@ -153,11 +169,14 @@ class PushNotifier:
     def send_alerts(self, alerts: list[Alert], tokens: list[str], store_name: str = "") -> None:
         if len(alerts) > MAX_NOTIFICATIONS:
             names = ", ".join(a.event.title for a in alerts[:3])
-            self.send(f"{len(alerts)} prendas para ti en {store_name or 'la tienda'}", f"{names}…", DASHBOARD_URL, tokens=tokens)
+            self.send(f"{len(alerts)} prendas para ti en {store_name or 'la tienda'}", f"{names}…", ACTIVITY_LINK,
+                      tokens=tokens, tag="summary")
             return
         for a in alerts:
             title, body = a.format()
-            self.send(title, body, a.event.url, a.event.image, tokens=tokens)
+            e = a.event
+            self.send(title, body, app_link(e.store_id, e.product_id, e.type), e.image, tokens=tokens,
+                      tag=f"p-{e.store_id}_{e.product_id}")
 
     def notify_events(self, events: list[Event], products: dict[str, Product], store_name: str = "") -> int:
         """Actualiza los perfiles y envía a cada usuario sus avisos. Devuelve el total de avisos."""
@@ -191,7 +210,14 @@ def send_test() -> int:
     if n == 0:
         print("No hay dispositivos suscritos. Abre el dashboard y pulsa 'Activar notificaciones'.")
         return 1
-    delivered = notifier.send("🧪 Prueba · VaultShopXclusive", "Si ves esto, las notificaciones funcionan ✅")
+    # Enlaza a una prenda real para probar que la notificación abre su ficha en la app.
+    sample = next((d.to_dict() for d in notifier.db.collection("products").limit(50).stream()
+                   if d.to_dict().get("available") and d.to_dict().get("image")), None)
+    if sample:
+        delivered = notifier.send("🧪 Prueba · toca para abrir la prenda", f"{sample['title']}\nSi ves esto, las notificaciones funcionan ✅",
+                                  app_link(sample["store_id"], sample["id"], "restock"), sample["image"], tag="test")
+    else:
+        delivered = notifier.send("🧪 Prueba · VaultShopXclusive", "Si ves esto, las notificaciones funcionan ✅", tag="test")
     print(f"Notificación de prueba entregada a {delivered} de {n} dispositivos")
     return 0 if delivered else 1
 
@@ -214,7 +240,8 @@ def send_recommendations() -> int:
         stars, best = max(scored, key=lambda x: x[0])
         why = profile.reasons(best)
         body = f"{best['title']}\n≈{stars:.1f}★" + (f" · te gusta {', '.join(why)}" if why else "")
-        notifier.send("✨ Esta prenda te puede gustar", body, best["url"], best.get("image", ""), tokens=tokens)
+        notifier.send("✨ Esta prenda te puede gustar", body, app_link(best["store_id"], best["id"], "for_you"),
+                      best.get("image", ""), tokens=tokens, tag=f"p-{best['store_id']}_{best['id']}")
         print(f"Usuario {uid[:6]}: recomendado {best['title']} (≈{stars:.1f}★)")
         sent += 1
     return 0 if sent else 1
