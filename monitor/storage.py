@@ -67,12 +67,15 @@ class LocalStorage:
 
 class FirestoreStorage:
     """Colecciones:
-    - products/{store_id}_{product_id}: estado actual de cada producto
+    - catalog/{store_id}_{n}: el catálogo de la tienda repartido en pocos documentos grandes
+      (campo `products`). Leer el estado cuesta ~3 lecturas en vez de una por prenda, lo que
+      mantiene el monitor y el dashboard dentro de la cuota gratuita de Firestore.
     - events/{auto}: cambios detectados
     - snapshots/{auto}: disponibilidad por variante en cada ejecución (histórico)
     """
 
     BATCH_LIMIT = 400  # Firestore admite 500 operaciones por batch
+    CHUNK_BYTES = 600_000  # margen bajo el límite de 1 MiB por documento
 
     def __init__(self, credentials: str | dict):
         import firebase_admin
@@ -82,56 +85,73 @@ class FirestoreStorage:
         if not firebase_admin._apps:
             firebase_admin.initialize_app(fb_credentials.Certificate(credentials))
         self.db = firestore.client()
+        self._loaded: dict[str, dict[str, dict]] = {}  # store_id -> id -> entrada guardada
+        self._chunks: dict[str, dict[str, list]] = {}  # store_id -> doc id -> productos
 
-    @staticmethod
-    def _doc_id(store_id: str, product_id: str) -> str:
-        return f"{store_id}_{product_id}"
-
-    def load_state(self, store_id: str) -> dict[str, Product]:
+    def catalog_docs(self, store_id: str | None = None) -> list[dict]:
+        """Prendas guardadas (con campos derivados: exclusivity, available, min_price, drop...)."""
         from google.cloud.firestore_v1.base_query import FieldFilter
 
-        docs = self.db.collection("products").where(filter=FieldFilter("store_id", "==", store_id)).stream()
-        products = {}
-        self._stored_labels: dict[str, tuple] = {}
-        for doc in docs:
+        col = self.db.collection("catalog")
+        query = col.where(filter=FieldFilter("store_id", "==", store_id)) if store_id else col
+        items = []
+        for doc in query.stream():
             data = doc.to_dict()
-            for derived in ("updated_at", "available", "min_price", "drop"):
-                data.pop(derived, None)
-            # Se guardan aparte para reescribir el producto si cambian las reglas del clasificador.
-            self._stored_labels[data["id"]] = tuple(data.pop("exclusivity", []))
-            products[data["id"]] = Product.from_dict(data)
-        return products
+            if store_id:
+                self._chunks.setdefault(store_id, {})[doc.id] = data.get("products", [])
+            items.extend(data.get("products", []))
+        return items
+
+    def load_state(self, store_id: str) -> dict[str, Product]:
+        self._chunks[store_id] = {}
+        entries = {e["id"]: e for e in self.catalog_docs(store_id)}
+        self._loaded[store_id] = entries
+        fields = set(Product.__dataclass_fields__)
+        return {pid: Product.from_dict({k: v for k, v in e.items() if k in fields}) for pid, e in entries.items()}
 
     def save_state(self, store_id: str, products: dict[str, Product], previous: dict[str, Product] | None = None) -> None:
-        """Escribe solo los productos nuevos o cambiados y borra los retirados, para ahorrar escrituras."""
+        """Reparte el catálogo en documentos y escribe solo los que han cambiado."""
         from monitor.classifier import classify, drop_id
 
-        previous = previous or {}
-        stored_labels = getattr(self, "_stored_labels", {})
-        now = datetime.now(timezone.utc)
-        ops = []
-        for pid, prod in products.items():
-            labels = classify(prod)
-            if previous.get(pid) != prod or stored_labels.get(pid) != tuple(labels):
-                ops.append(("set", pid, {
-                    **prod.to_dict(),
-                    "available": prod.available,
-                    "min_price": prod.min_price,
-                    "exclusivity": labels,
-                    "drop": drop_id(prod),
-                    "updated_at": now,
-                }))
-        ops.extend(("delete", pid, None) for pid in previous if pid not in products)
-        self._commit(ops, store_id)
+        loaded = self._loaded.get(store_id, {})
+        now = datetime.now(timezone.utc).isoformat()
+        entries = []
+        for pid in sorted(products):
+            prod = products[pid]
+            entry = {**prod.to_dict(), "available": prod.available, "min_price": prod.min_price,
+                     "exclusivity": classify(prod), "drop": drop_id(prod)}
+            old = loaded.get(pid)
+            unchanged = old is not None and all(old.get(k) == v for k, v in entry.items())
+            entry["updated_at"] = old.get("updated_at", now) if unchanged else now
+            entries.append(entry)
 
-    def _commit(self, ops: list, store_id: str) -> None:
-        col = self.db.collection("products")
-        for i in range(0, len(ops), self.BATCH_LIMIT):
-            batch = self.db.batch()
-            for op, pid, data in ops[i:i + self.BATCH_LIMIT]:
-                ref = col.document(self._doc_id(store_id, pid))
-                batch.set(ref, data) if op == "set" else batch.delete(ref)
+        chunks, current, size = [], [], 0
+        for e in entries:
+            n = len(json.dumps(e, ensure_ascii=False))
+            if current and size + n > self.CHUNK_BYTES:
+                chunks.append(current)
+                current, size = [], 0
+            current.append(e)
+            size += n
+        if current:
+            chunks.append(current)
+
+        old_chunks = self._chunks.get(store_id, {})
+        new_chunks = {f"{store_id}_{i}": c for i, c in enumerate(chunks)}
+        batch = self.db.batch()
+        writes = 0
+        for doc_id, items in new_chunks.items():
+            if old_chunks.get(doc_id) != items:
+                batch.set(self.db.collection("catalog").document(doc_id),
+                          {"store_id": store_id, "products": items, "updated_at": now})
+                writes += 1
+        for doc_id in old_chunks.keys() - new_chunks.keys():
+            batch.delete(self.db.collection("catalog").document(doc_id))
+            writes += 1
+        if writes:
             batch.commit()
+        self._chunks[store_id] = new_chunks
+        self._loaded[store_id] = {e["id"]: e for e in entries}
 
     def append_events(self, events: list[Event]) -> None:
         now = datetime.now(timezone.utc)

@@ -199,7 +199,9 @@ def _notifier():
     if not isinstance(storage, FirestoreStorage):
         print("Hacen falta credenciales de Firebase (firebase-key.json o FIREBASE_CREDENTIALS)")
         return None
-    return PushNotifier(storage.db)
+    notifier = PushNotifier(storage.db)
+    notifier.storage = storage
+    return notifier
 
 
 def send_test() -> int:
@@ -211,8 +213,7 @@ def send_test() -> int:
         print("No hay dispositivos suscritos. Abre el dashboard y pulsa 'Activar notificaciones'.")
         return 1
     # Enlaza a una prenda real para probar que la notificación abre su ficha en la app.
-    sample = next((d.to_dict() for d in notifier.db.collection("products").limit(50).stream()
-                   if d.to_dict().get("available") and d.to_dict().get("image")), None)
+    sample = next((p for p in notifier.storage.catalog_docs() if p.get("available") and p.get("image")), None)
     if sample:
         delivered = notifier.send("🧪 Prueba · toca para abrir la prenda", f"{sample['title']}\nSi ves esto, las notificaciones funcionan ✅",
                                   app_link(sample["store_id"], sample["id"], "restock"), sample["image"], tag="test")
@@ -227,7 +228,7 @@ def send_recommendations() -> int:
     notifier = _notifier()
     if notifier is None:
         return 1
-    products = [d.to_dict() for d in notifier.db.collection("products").stream()]
+    products = notifier.storage.catalog_docs()
     sent = 0
     for uid, tokens in notifier.subscribers().items():
         profile, rated = notifier.taste(uid, products)

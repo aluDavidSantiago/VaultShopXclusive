@@ -432,8 +432,13 @@ function onError(err) {
   setStatus(msg, "error");
 }
 
-onSnapshot(collection(db, "products"), (snap) => {
-  state.products = snap.docs.map((d) => ({ ...d.data(), docId: d.id }));
+// El catálogo va repartido en pocos documentos grandes (catalog/{tienda}_{n}): abrir la app
+// cuesta ~3 lecturas de Firestore en vez de una por prenda.
+onSnapshot(collection(db, "catalog"), (snap) => {
+  state.products = snap.docs.flatMap((d) => {
+    const { store_id: store, products = [] } = d.data();
+    return products.map((p) => ({ ...p, store_id: p.store_id || store, docId: `${p.store_id || store}_${p.id}` }));
+  });
   const first = !state.loaded;
   state.loaded = true;
   const last = state.products.map((p) => toDate(p.updated_at)).filter(Boolean).sort((a, b) => b - a)[0];

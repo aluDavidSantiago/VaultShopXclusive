@@ -199,3 +199,96 @@ def test_pick_alerts_without_profile_only_exclusives():
     from monitor.notify import pick_alerts
     events = [event("restock", "A", pid="a"), event("new_product", "B", ["collab"], pid="b")]
     assert [a.event.product_id for a in pick_alerts(events, {}, None, {})] == ["b"]
+
+
+class FakeFirestore:
+    """Lo mínimo de Firestore para probar FirestoreStorage sin red: cuenta lecturas y escrituras."""
+
+    def __init__(self):
+        self.data, self.reads, self.writes = {}, 0, 0
+
+    def collection(self, name):
+        db = self
+
+        class Doc:
+            def __init__(self, doc_id):
+                self.id = doc_id
+            def to_dict(self):
+                return db.data[name][self.id]
+
+        class Ref:
+            def __init__(self, doc_id):
+                self.doc_id = doc_id
+
+        class Col:
+            def document(self, doc_id):
+                return Ref(doc_id)
+            def where(self, filter):
+                field, value = filter.field_path, filter.value
+                return Query(lambda d: d.get(field) == value)
+            def stream(self):
+                return Query(lambda d: True).stream()
+
+        class Query:
+            def __init__(self, pred):
+                self.pred = pred
+            def stream(self):
+                for doc_id, d in db.data.get(name, {}).items():
+                    if self.pred(d):
+                        db.reads += 1
+                        yield Doc(doc_id)
+
+        Col.name = name
+        return Col()
+
+    def batch(self):
+        db = self
+
+        class Batch:
+            ops = []
+            def set(self, ref, data):
+                self.ops.append(("set", ref, data))
+            def delete(self, ref):
+                self.ops.append(("del", ref, None))
+            def commit(self):
+                for op, ref, data in self.ops:
+                    db.writes += 1
+                    if op == "set":
+                        db.data.setdefault("catalog", {})[ref.doc_id] = data
+                    else:
+                        db.data.get("catalog", {}).pop(ref.doc_id, None)
+                self.ops.clear()
+
+        b = Batch()
+        b.ops = []
+        return b
+
+
+def test_firestore_catalog_in_chunks():
+    from monitor.storage import FirestoreStorage
+
+    s = FirestoreStorage.__new__(FirestoreStorage)
+    s.db, s._loaded, s._chunks = FakeFirestore(), {}, {}
+    s.CHUNK_BYTES = 2_000  # trozos pequeños para que haya varios
+
+    products = {str(i): product(str(i), [("S", True), ("M", i % 2 == 0)], title=f"TEE {i}") for i in range(30)}
+    assert s.load_state("shop") == {}
+    s.save_state("shop", products)
+    n_chunks = len(s.db.data["catalog"])
+    assert n_chunks > 1 and s.db.writes == n_chunks
+
+    # Releer: una lectura por trozo, no por prenda, y el mismo catálogo.
+    s2 = FirestoreStorage.__new__(FirestoreStorage)
+    s2.db, s2._loaded, s2._chunks = s.db, {}, {}
+    s2.CHUNK_BYTES = s.CHUNK_BYTES
+    s.db.reads = s.db.writes = 0
+    assert s2.load_state("shop") == products
+    assert s.db.reads == n_chunks
+
+    # Sin cambios no se escribe nada; con un cambio, solo su trozo.
+    s2.save_state("shop", products)
+    assert s.db.writes == 0
+    changed = dict(products)
+    changed["5"] = product("5", [("S", False), ("M", False)], title="TEE 5")
+    s2.save_state("shop", changed)
+    assert s.db.writes == 1
