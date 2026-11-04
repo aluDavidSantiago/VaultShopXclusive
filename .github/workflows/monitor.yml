@@ -1,7 +1,7 @@
 name: Monitor
 
-# Cada 20 minutos (GitHub puede retrasar las ejecuciones programadas unos minutos)
-# y también a mano desde la pestaña Actions.
+# Cada 20 minutos, en minutos poco concurridos (:07, :27, :47): GitHub retrasa o
+# descarta ejecuciones en las horas en punto. También a mano desde la pestaña Actions.
 on:
   workflow_dispatch:
     inputs:
@@ -11,7 +11,7 @@ on:
         default: monitor
         options: [monitor, notificacion-de-prueba, recomendacion-de-prueba]
   schedule:
-    - cron: "*/20 * * * *"
+    - cron: "7,27,47 * * * *"
 
 concurrency:
   group: monitor
