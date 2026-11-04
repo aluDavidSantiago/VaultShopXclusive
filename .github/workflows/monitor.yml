@@ -1,0 +1,27 @@
+name: Monitor
+
+# De momento solo manual, para comprobar que la tienda responde desde GitHub.
+# Cuando funcione, se activará el cron.
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "*/20 * * * *"
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m monitor.main
+        env:
+          FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
