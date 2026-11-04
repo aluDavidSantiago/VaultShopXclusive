@@ -1,0 +1,11 @@
+# Tiendas monitorizadas.
+# platform: tipo de adaptador (de momento solo "shopify").
+# request_delay: segundos de espera entre peticiones a la misma tienda.
+user_agent: "VaultShopXclusive/0.1 (+https://github.com/aluDavidSantiago/VaultShopXclusive)"
+
+stores:
+  - id: cold-culture
+    name: Cold Culture
+    platform: shopify
+    url: https://coldculture.com
+    request_delay: 2
