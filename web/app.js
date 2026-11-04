@@ -164,7 +164,7 @@ function renderProducts({ animate = false } = {}) {
 
   let list = state.products
     .filter((p) => !q || p.title.toLowerCase().includes(q))
-    .filter((p) => !tag || (p.exclusivity || []).includes(tag))
+    .filter((p) => !tag || (tag === "exclusive" ? exclusiveScore(p) > 0 : (p.exclusivity || []).includes(tag)))
     .filter((p) => !onlyStock || p.available)
     .map((p) => ({ p, pred: ready ? predict(p) : null }));
 
@@ -229,6 +229,12 @@ function renderStats() {
   countUp($("stat-total"), state.products.length);
   countUp($("stat-available"), state.products.filter((p) => p.available).length);
   countUp($("stat-exclusive"), state.products.filter((p) => exclusiveScore(p) > 0).length);
+  // Desglose: qué etiquetas forman el número de "Exclusivos".
+  const parts = [...EXCLUSIVE].map((t) => [t, state.products.filter((p) => (p.exclusivity || []).includes(t)).length]);
+  const nonZero = parts.filter(([, n]) => n);
+  $("stat-exclusive-detail").textContent = nonZero.length
+    ? nonZero.map(([t, n]) => `${n} ${TAG_LABELS[t]}`).join(" · ")
+    : "Vault · Limited · Collab · Acabado";
   countUp($("stat-events"), state.events.length);
 }
 
@@ -262,13 +268,37 @@ onSnapshot(query(collection(db, "events"), orderBy("ts", "desc"), limit(50)), (s
 }, onError);
 
 for (const id of ["search", "filter-stock", "sort"]) $(id).addEventListener("input", () => renderProducts({ animate: true }));
+function selectTag(tag) {
+  state.tag = tag;
+  let active;
+  document.querySelectorAll(".chip").forEach((c) => {
+    c.classList.toggle("active", c.dataset.tag === tag);
+    if (c.dataset.tag === tag) active = c;
+  });
+  active?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  $("stats").querySelectorAll(".stat").forEach((s) => s.classList.toggle("active",
+    (s.dataset.stat === "exclusive" && tag === "exclusive") || (s.dataset.stat === "stock" && $("filter-stock").checked)));
+  renderProducts({ animate: true });
+}
+
 $("chips").addEventListener("click", (ev) => {
   const chip = ev.target.closest(".chip");
-  if (!chip) return;
-  state.tag = chip.dataset.tag;
-  document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c === chip));
-  chip.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-  renderProducts({ animate: true });
+  if (chip) selectTag(chip.dataset.tag);
+});
+$("filter-stock").addEventListener("change", () => selectTag(state.tag));
+
+// Los contadores también filtran.
+$("stats").addEventListener("click", (ev) => {
+  const stat = ev.target.closest(".stat")?.dataset.stat;
+  if (!stat) return;
+  if (stat === "events") {
+    document.querySelector(".feed").scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  if (stat === "all") { $("filter-stock").checked = false; $("search").value = ""; selectTag(""); }
+  if (stat === "stock") { $("filter-stock").checked = !$("filter-stock").checked; selectTag(state.tag); }
+  if (stat === "exclusive") selectTag(state.tag === "exclusive" ? "" : "exclusive");
+  document.querySelector(".catalog").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 renderProducts();
 renderEvents();

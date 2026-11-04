@@ -35,11 +35,11 @@
   <main>
     <p class="notice" id="notify-msg" hidden></p>
 
-    <section class="stats">
-      <div class="stat" style="--c: var(--accent)"><b id="stat-total">–</b><span>Productos</span></div>
-      <div class="stat" style="--c: var(--ok)"><b id="stat-available">–</b><span>En stock</span></div>
-      <div class="stat" style="--c: var(--pink)"><b id="stat-exclusive">–</b><span>Exclusivos</span></div>
-      <div class="stat" style="--c: var(--sky)"><b id="stat-events">–</b><span>Eventos</span></div>
+    <section class="stats" id="stats">
+      <button type="button" class="stat" data-stat="all" style="--c: var(--accent)"><b id="stat-total">–</b><span>Productos</span><small>Ver todo</small></button>
+      <button type="button" class="stat" data-stat="stock" style="--c: var(--ok)"><b id="stat-available">–</b><span>En stock</span><small>Solo en stock</small></button>
+      <button type="button" class="stat" data-stat="exclusive" style="--c: var(--pink)"><b id="stat-exclusive">–</b><span>Exclusivos</span><small id="stat-exclusive-detail">Vault · Limited · Collab · Acabado</small></button>
+      <button type="button" class="stat" data-stat="events" style="--c: var(--sky)"><b id="stat-events">–</b><span>Eventos</span><small>Ver actividad</small></button>
     </section>
 
     <div class="layout">
@@ -65,6 +65,7 @@
 
         <div class="chips" id="chips" role="tablist" aria-label="Filtrar por etiqueta">
           <button type="button" class="chip active" data-tag="">Todo</button>
+          <button type="button" class="chip exclusive" data-tag="exclusive">💎 Exclusivos</button>
           <button type="button" class="chip vault" data-tag="vault">Vault</button>
           <button type="button" class="chip limited" data-tag="limited">Limited</button>
           <button type="button" class="chip collab" data-tag="collab">Collab</button>
