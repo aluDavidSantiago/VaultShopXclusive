@@ -221,3 +221,7 @@ __marimo__/
 
 # Estado local del monitor
 data/
+
+# Credenciales de Firebase (nunca subir)
+firebase-key.json
+*-firebase-adminsdk-*.json
