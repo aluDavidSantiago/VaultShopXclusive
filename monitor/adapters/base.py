@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from urllib.robotparser import RobotFileParser
 
@@ -36,6 +37,18 @@ class StoreAdapter(ABC):
             self._robots.parse(lines)
         if not self._robots.can_fetch(self.user_agent, f"{self.base_url}{path}"):
             raise RobotsDisallowed(f"robots.txt de {self.base_url} no permite {path}")
+
+    def get_with_backoff(self, url: str, params: dict | None = None, retries: int = 3) -> httpx.Response:
+        """GET que, ante un 429 (demasiadas peticiones), espera y reintenta."""
+        for attempt in range(retries + 1):
+            resp = self.client.get(url, params=params)
+            if resp.status_code != 429 or attempt == retries:
+                break
+            retry_after = resp.headers.get("Retry-After", "")
+            wait = float(retry_after) if retry_after.isdigit() else self.delay * 5 * (attempt + 1)
+            time.sleep(wait)
+        resp.raise_for_status()
+        return resp
 
     @abstractmethod
     def fetch_products(self) -> list[Product]:

@@ -61,6 +61,22 @@ def test_shopify_adapter_respects_robots():
         ShopifyAdapter(STORE, client, UA).fetch_products()
 
 
+def test_shopify_adapter_retries_on_429():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/robots.txt":
+            return httpx.Response(404)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"products": [raw_product(1, "Tee", [("S", True)])]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert len(ShopifyAdapter(STORE, client, UA).fetch_products()) == 1
+    assert calls["n"] == 2
+
+
 def test_first_run_produces_no_events():
     assert detect_changes({}, {"1": product("1", [("S", True)])}) == []
 

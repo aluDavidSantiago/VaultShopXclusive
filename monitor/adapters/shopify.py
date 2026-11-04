@@ -18,11 +18,10 @@ class ShopifyAdapter(StoreAdapter):
         for page in range(1, MAX_PAGES + 1):
             if page > 1:
                 time.sleep(self.delay)
-            resp = self.client.get(
+            resp = self.get_with_backoff(
                 f"{self.base_url}/products.json",
                 params={"limit": PAGE_SIZE, "page": page},
             )
-            resp.raise_for_status()
             batch = resp.json().get("products", [])
             products.extend(self.parse_product(p) for p in batch)
             if len(batch) < PAGE_SIZE:

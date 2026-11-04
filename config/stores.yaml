@@ -7,5 +7,5 @@ stores:
   - id: cold-culture
     name: Cold Culture
     platform: shopify
-    url: https://coldculture.com
-    request_delay: 2
+    url: https://coldcultureworldwide.com
+    request_delay: 3
