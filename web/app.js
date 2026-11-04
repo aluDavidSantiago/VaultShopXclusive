@@ -587,6 +587,9 @@ function openSheet(docId, eventType = "") {
   $("sheet-sizes").innerHTML = sizes.map((v) => `<span class="size ${v.available ? "on" : "off"}">${esc(v.title)}</span>`).join("");
   $("sheet-stars").innerHTML = state.uid ? starsHtml(p) : "";
   $("sheet-cta").href = safeUrl(p.url);
+  // En iPhone/iPad: botón que copia el nombre y abre la app de Cold Culture con un atajo.
+  $("sheet-app").hidden = !isIOS;
+  $("sheet-app").dataset.title = p.title;
 
   const sheet = $("sheet");
   sheet.classList.remove("closing");
@@ -606,6 +609,17 @@ function closeSheet() {
 }
 
 $("sheet").addEventListener("click", (ev) => { if (ev.target.closest("[data-close]")) closeSheet(); });
+
+// La app de Cold Culture no acepta enlaces, pero la app Atajos de iOS puede abrirla:
+// el usuario crea un atajo "Cold Culture" con la acción "Abrir app". Copiamos el nombre
+// de la prenda para pegarlo en el buscador de la app.
+const SHORTCUT_NAME = "Cold Culture";
+$("sheet-app").addEventListener("click", async () => {
+  const title = $("sheet-app").dataset.title || "";
+  try { await navigator.clipboard.writeText(title); } catch { /* sin permiso: se abre igual */ }
+  toast("📋 Nombre copiado · pégalo en el buscador de la app");
+  setTimeout(() => { location.href = `shortcuts://run-shortcut?name=${encodeURIComponent(SHORTCUT_NAME)}`; }, 450);
+});
 addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeSheet(); });
 
 $("events").addEventListener("click", (ev) => {

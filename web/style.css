@@ -617,3 +617,14 @@ html.anim .stat, html.anim .panel { animation: none; }
 }
 @keyframes sheet-up { from { transform: translateY(100%); } }
 @keyframes sheet-down { to { transform: translateY(100%); } }
+button.sheet-cta { width: 100%; border: 0; cursor: pointer; }
+.sheet-link {
+  display: flex; align-items: center; justify-content: center; height: 46px; border-radius: 14px;
+  color: var(--text); text-decoration: none; font-weight: 600; font-size: 14px;
+  background: rgba(255, 255, 255, .05); border: 1px solid var(--line);
+}
+.sheet-cta:not([hidden]) + .sheet-link { margin-top: 0; }
+.sheet-cta[hidden] + .sheet-link {
+  margin-top: auto; height: 52px; border: 0; color: #0b0b0d; font-size: 16px; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
