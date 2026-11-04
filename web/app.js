@@ -614,23 +614,23 @@ $("sheet").addEventListener("click", (ev) => { if (ev.target.closest("[data-clos
 // el usuario crea un atajo "Cold Culture" con la acción "Abrir app". Copiamos el nombre
 // de la prenda para pegarlo en el buscador de la app.
 const SHORTCUT_NAME = "Cold Culture";
-$("sheet-app").addEventListener("click", async () => {
-  const title = $("sheet-app").dataset.title || "";
+async function openInStoreApp(title) {
   try { await navigator.clipboard.writeText(title); } catch { /* sin permiso: se abre igual */ }
   toast("📋 Nombre copiado · pégalo en el buscador de la app");
   setTimeout(() => { location.href = `shortcuts://run-shortcut?name=${encodeURIComponent(SHORTCUT_NAME)}`; }, 450);
-});
+}
+$("sheet-app").addEventListener("click", () => openInStoreApp($("sheet-app").dataset.title || ""));
 addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeSheet(); });
 
-// Tocar una prenda (catálogo o sección destacada) abre su ficha en vez de ir a la tienda.
+// Tocar una prenda (catálogo o sección destacada): en iPhone/iPad va directo a la app de
+// Cold Culture; en ordenador, el enlace abre la web de la tienda como siempre.
 document.addEventListener("click", (ev) => {
-  if (ev.target.closest("button[data-rate]")) return; // las estrellas valoran, no abren
+  if (!isIOS || ev.target.closest("button[data-rate]")) return; // las estrellas valoran, no abren
   const link = ev.target.closest("#products .card a, #featured-track .feature-card");
-  if (!link) return;
-  const docId = link.closest("[data-doc]")?.dataset.doc;
-  if (!docId) return;
+  const p = link && state.products.find((x) => x.docId === link.closest("[data-doc]")?.dataset.doc);
+  if (!p) return;
   ev.preventDefault();
-  openSheet(docId);
+  openInStoreApp(p.title);
 });
 
 $("events").addEventListener("click", (ev) => {
