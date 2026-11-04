@@ -17,6 +17,17 @@ from monitor.storage import FirestoreStorage, open_storage
 log = logging.getLogger("monitor")
 
 
+def is_transient(exc: Exception) -> bool:
+    """Errores que se arreglan solos esperando: la tienda pide ir más despacio (429) o está
+    caída un momento (5xx), o Firestore agotó la cuota del día. No deben marcar el run como
+    fallido (cada fallo manda un email); la siguiente pasada lo vuelve a intentar."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429 or exc.response.status_code >= 500
+    if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    return type(exc).__name__ in {"ResourceExhausted", "ServiceUnavailable", "DeadlineExceeded"}
+
+
 def run(config_path: str, data_dir: str) -> int:
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
@@ -34,17 +45,19 @@ def run(config_path: str, data_dir: str) -> int:
                 continue
             try:
                 products = adapter_cls(store, client, user_agent).fetch_products()
+                new = {p.id: p for p in products}
+                old = storage.load_state(store["id"])
+                events = detect_changes(old, new)
+                storage.save_state(store["id"], new, old)
+                storage.append_snapshot(store["id"], new)
+                storage.append_events(events)
             except Exception as exc:  # una tienda caída no debe parar las demás
-                log.error("%s: error al leer la tienda: %s", store["id"], exc)
-                failures += 1
+                if is_transient(exc):
+                    log.warning("%s: error temporal, se reintentará en la próxima pasada: %s", store["id"], exc)
+                else:
+                    log.error("%s: error: %s", store["id"], exc)
+                    failures += 1
                 continue
-
-            new = {p.id: p for p in products}
-            old = storage.load_state(store["id"])
-            events = detect_changes(old, new)
-            storage.save_state(store["id"], new, old)
-            storage.append_snapshot(store["id"], new)
-            storage.append_events(events)
 
             if not old:
                 log.info("%s: línea base guardada (%d productos)", store["id"], len(new))

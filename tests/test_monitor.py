@@ -292,3 +292,19 @@ def test_firestore_catalog_in_chunks():
     changed["5"] = product("5", [("S", False), ("M", False)], title="TEE 5")
     s2.save_state("shop", changed)
     assert s.db.writes == 1
+
+
+def test_transient_errors_do_not_fail_the_run():
+    from monitor.main import is_transient
+
+    def http_error(code):
+        req = httpx.Request("GET", "https://shop.test")
+        return httpx.HTTPStatusError("x", request=req, response=httpx.Response(code, request=req))
+
+    class ResourceExhausted(Exception):
+        pass
+
+    assert is_transient(http_error(429)) and is_transient(http_error(503))
+    assert is_transient(ResourceExhausted("Quota exceeded"))
+    assert not is_transient(http_error(404))
+    assert not is_transient(KeyError("id"))
