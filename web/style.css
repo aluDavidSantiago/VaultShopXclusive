@@ -539,3 +539,6 @@ html.anim .stat, html.anim .panel { animation: none; }
 .hero-scroll-wrap .hero-scroll { pointer-events: auto; }
 .hero-title, .hero-kicker { text-shadow: 0 6px 40px rgba(0, 0, 0, .65); }
 .hero-sub { color: #c9c9d4; text-shadow: 0 2px 18px rgba(0, 0, 0, .9); }
+.card .meta { flex-wrap: wrap; gap: 2px 8px; }
+.card .price { white-space: nowrap; }
+.card .meta span:last-child { font-size: 11px; }
