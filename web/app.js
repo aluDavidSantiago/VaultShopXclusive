@@ -17,7 +17,11 @@ const EVENT_LABELS = {
 };
 const TAG_LABELS = {
   vault: "Vault", limited: "Limited", special_finish: "Acabado", collab: "Collab", short_run: "Tirada corta",
+  back_in_stock: "Back in stock", bestseller: "Bestseller", sale: "Rebaja",
 };
+// Etiquetas que cuentan como "exclusivo" en los contadores y la ordenación.
+const EXCLUSIVE = new Set(["vault", "limited", "special_finish", "collab"]);
+const exclusiveScore = (p) => (p.exclusivity || []).filter((t) => EXCLUSIVE.has(t)).length;
 
 const $ = (id) => document.getElementById(id);
 const state = { products: [], events: [] };
@@ -47,7 +51,7 @@ function renderProducts() {
     .filter((p) => !q || p.title.toLowerCase().includes(q))
     .filter((p) => !tag || (p.exclusivity || []).includes(tag))
     .filter((p) => !onlyStock || p.available)
-    .sort((a, b) => (b.exclusivity?.length || 0) - (a.exclusivity?.length || 0) || Number(b.available) - Number(a.available));
+    .sort((a, b) => exclusiveScore(b) - exclusiveScore(a) || Number(b.available) - Number(a.available) || (b.drop || "").localeCompare(a.drop || "", undefined, { numeric: true }));
 
   $("products").innerHTML = list.length
     ? list.map((p) => `
@@ -57,7 +61,7 @@ function renderProducts() {
           <div class="tags">${tagsHtml(p.exclusivity)}</div>
           <div class="title">${esc(p.title)}</div>
           <div class="sizes">${(p.variants || []).map((v) => `<span class="size ${v.available ? "on" : "off"}">${esc(v.title)}</span>`).join("")}</div>
-          <div class="meta"><span class="price">${Number(p.min_price || 0).toFixed(2)}</span><span>${p.available ? "En stock" : "Agotado"}</span></div>
+          <div class="meta"><span class="price">${Number(p.min_price || 0).toFixed(2)} €</span><span>${p.drop ? `${esc(p.drop)} · ` : ""}${p.available ? "En stock" : "Agotado"}</span></div>
         </div>
       </a>`).join("")
     : `<p class="empty">${state.products.length ? "Ningún producto coincide con los filtros." : "Aún no hay productos. Aparecerán cuando el monitor haga su primera lectura."}</p>`;
@@ -79,7 +83,7 @@ function renderEvents() {
 function renderStats() {
   $("stat-total").textContent = state.products.length;
   $("stat-available").textContent = state.products.filter((p) => p.available).length;
-  $("stat-exclusive").textContent = state.products.filter((p) => (p.exclusivity || []).some((t) => t !== "short_run")).length;
+  $("stat-exclusive").textContent = state.products.filter((p) => exclusiveScore(p) > 0).length;
   $("stat-events").textContent = state.events.length;
 }
 

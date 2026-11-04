@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 from monitor.adapters import RobotsDisallowed, ShopifyAdapter
-from monitor.classifier import classify
+from monitor.classifier import classify, drop_id
 from monitor.detector import detect_changes
 from monitor.models import Product, Variant
 from monitor.storage import LocalStorage
@@ -112,6 +112,15 @@ def test_detects_removed_product():
 def test_classifier():
     assert classify(product("1", [("S", True)], title="Embroidered Puff Hoodie")) == ["special_finish"]
     assert classify(product("1", [("S", True)], title="Basic Tee")) == []
+
+
+def test_classifier_store_tags_and_collab():
+    p = product("1", [("S", True)], title="X-KEVIL KEYCHAIN")
+    assert "collab" not in classify(p)
+    assert "collab" in classify(product("1", [("S", True)], title="COLD CULTURE x NIKE TEE"))
+    p.tags = ["backinstock", "30%off", "2026julio_drop29", "drop16y17"]
+    assert set(classify(p)) == {"back_in_stock", "sale"}
+    assert drop_id(p) == "drop29"
 
 
 def test_storage_roundtrip(tmp_path):

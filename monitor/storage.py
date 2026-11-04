@@ -92,29 +92,33 @@ class FirestoreStorage:
 
         docs = self.db.collection("products").where(filter=FieldFilter("store_id", "==", store_id)).stream()
         products = {}
+        self._stored_labels: dict[str, tuple] = {}
         for doc in docs:
             data = doc.to_dict()
-            data.pop("updated_at", None)
-            data.pop("available", None)
-            data.pop("min_price", None)
-            data.pop("exclusivity", None)
+            for derived in ("updated_at", "available", "min_price", "drop"):
+                data.pop(derived, None)
+            # Se guardan aparte para reescribir el producto si cambian las reglas del clasificador.
+            self._stored_labels[data["id"]] = tuple(data.pop("exclusivity", []))
             products[data["id"]] = Product.from_dict(data)
         return products
 
     def save_state(self, store_id: str, products: dict[str, Product], previous: dict[str, Product] | None = None) -> None:
         """Escribe solo los productos nuevos o cambiados y borra los retirados, para ahorrar escrituras."""
-        from monitor.classifier import classify
+        from monitor.classifier import classify, drop_id
 
         previous = previous or {}
+        stored_labels = getattr(self, "_stored_labels", {})
         now = datetime.now(timezone.utc)
         ops = []
         for pid, prod in products.items():
-            if previous.get(pid) != prod:
+            labels = classify(prod)
+            if previous.get(pid) != prod or stored_labels.get(pid) != tuple(labels):
                 ops.append(("set", pid, {
                     **prod.to_dict(),
                     "available": prod.available,
                     "min_price": prod.min_price,
-                    "exclusivity": classify(prod),
+                    "exclusivity": labels,
+                    "drop": drop_id(prod),
                     "updated_at": now,
                 }))
         ops.extend(("delete", pid, None) for pid in previous if pid not in products)

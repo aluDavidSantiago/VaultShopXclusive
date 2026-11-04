@@ -1,11 +1,11 @@
 name: Monitor
 
-# De momento solo manual, para comprobar que la tienda responde desde GitHub.
-# Cuando funcione, se activará el cron.
+# Cada 20 minutos (GitHub puede retrasar las ejecuciones programadas unos minutos)
+# y también a mano desde la pestaña Actions.
 on:
   workflow_dispatch:
-  # schedule:
-  #   - cron: "*/20 * * * *"
+  schedule:
+    - cron: "*/20 * * * *"
 
 concurrency:
   group: monitor
