@@ -235,7 +235,7 @@ function renderFeatured() {
   $("featured-kicker").textContent = forYou ? "Seleccionado para ti" : "Lo más especial ahora";
   $("featured-title").textContent = forYou ? "Para ti" : "Exclusivos";
   $("featured-track").innerHTML = items.map(({ p, s }, i) => `
-    <a class="feature-card" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">
+    <a class="feature-card" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener" data-doc="${esc(p.docId)}">
       <img src="${esc(thumb(p.image))}" alt="" loading="lazy" decoding="async">
       <span class="fc-num">${String(i + 1).padStart(2, "0")}</span>
       ${s !== null ? `<span class="for-you fc-score">✨ ${s.toFixed(1)}★</span>` : ""}
@@ -621,6 +621,17 @@ $("sheet-app").addEventListener("click", async () => {
   setTimeout(() => { location.href = `shortcuts://run-shortcut?name=${encodeURIComponent(SHORTCUT_NAME)}`; }, 450);
 });
 addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeSheet(); });
+
+// Tocar una prenda (catálogo o sección destacada) abre su ficha en vez de ir a la tienda.
+document.addEventListener("click", (ev) => {
+  if (ev.target.closest("button[data-rate]")) return; // las estrellas valoran, no abren
+  const link = ev.target.closest("#products .card a, #featured-track .feature-card");
+  if (!link) return;
+  const docId = link.closest("[data-doc]")?.dataset.doc;
+  if (!docId) return;
+  ev.preventDefault();
+  openSheet(docId);
+});
 
 $("events").addEventListener("click", (ev) => {
   const li = ev.target.closest(".event[data-doc]");
