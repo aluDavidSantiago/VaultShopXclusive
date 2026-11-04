@@ -128,3 +128,45 @@ def test_storage_roundtrip(tmp_path):
     state = {"1": product("1", [("S", True), ("M", False)])}
     storage.save_state("test", state)
     assert storage.load_state("test") == state
+
+
+def event(type_, title="Tee", labels=()):
+    from monitor.models import Event
+    return Event(type=type_, store_id="test", product_id=title, title=title, url="https://shop.test/p", exclusivity=list(labels))
+
+
+def test_should_notify():
+    from monitor.notify import should_notify
+    assert should_notify(event("restock"))
+    assert should_notify(event("new_product"))
+    assert not should_notify(event("sold_out"))
+    assert should_notify(event("sold_out", labels=["vault"]))
+    assert not should_notify(event("price_change", labels=["sale"]))
+
+
+def test_format_event():
+    from monitor.notify import format_event
+    e = event("restock", "VAULT HOODIE", ["vault", "sale"])
+    e.detail = "tallas: S, M"
+    assert format_event(e) == ("🔁 RESTOCK · VAULT", "VAULT HOODIE\ntallas: S, M")
+
+
+def test_send_events_individual_and_summary():
+    from monitor.notify import MAX_NOTIFICATIONS, PushNotifier
+
+    class FakeNotifier(PushNotifier):
+        def __init__(self):
+            self.sent = []
+
+        def send(self, title, body, link="", image=""):
+            self.sent.append((title, body, link))
+            return 1
+
+    n = FakeNotifier()
+    assert n.send_events([event("restock", "A"), event("sold_out", "B"), event("new_product", "C", ["collab"])]) == 2
+    assert n.sent[0][0].startswith("🆕 Nuevo · COLLAB")  # los exclusivos primero
+
+    n = FakeNotifier()
+    many = [event("restock", f"P{i}") for i in range(MAX_NOTIFICATIONS + 1)]
+    assert n.send_events(many, "Cold Culture") == MAX_NOTIFICATIONS + 1
+    assert len(n.sent) == 1 and n.sent[0][0] == f"{MAX_NOTIFICATIONS + 1} cambios en Cold Culture"

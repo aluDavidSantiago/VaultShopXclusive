@@ -6,6 +6,11 @@
   <title>VaultShopXclusive</title>
   <meta name="description" content="Monitor en directo de restocks y productos exclusivos.">
   <meta name="theme-color" content="#0b0b0d">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="VaultShop">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -14,8 +19,12 @@
       <span class="dot" id="live-dot"></span>
       <h1>VaultShop<span>X</span>clusive</h1>
     </div>
-    <p class="status" id="status">Conectando…</p>
+    <div class="top-right">
+      <p class="status" id="status">Conectando…</p>
+      <button type="button" class="notify-btn" id="notify-btn">🔔 Activar notificaciones</button>
+    </div>
   </header>
+  <p class="notice" id="notify-msg" hidden></p>
 
   <main>
     <section class="stats" id="stats">

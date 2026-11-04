@@ -54,6 +54,7 @@ def _event(type_: str, prod: Product, detail: str = "") -> Event:
         url=prod.url,
         detail=detail,
         exclusivity=classify(prod),
+        image=prod.image,
     )
 
 

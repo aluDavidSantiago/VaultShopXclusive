@@ -11,7 +11,8 @@ import yaml
 
 from monitor.adapters import ADAPTERS
 from monitor.detector import detect_changes
-from monitor.storage import open_storage
+from monitor.notify import PushNotifier
+from monitor.storage import FirestoreStorage, open_storage
 
 log = logging.getLogger("monitor")
 
@@ -21,6 +22,7 @@ def run(config_path: str, data_dir: str) -> int:
         config = yaml.safe_load(f)
     user_agent = config["user_agent"]
     storage = open_storage(data_dir)
+    notifier = PushNotifier(storage.db) if isinstance(storage, FirestoreStorage) else None
     failures = 0
 
     with httpx.Client(headers={"User-Agent": user_agent}, timeout=20, follow_redirects=True) as client:
@@ -50,6 +52,13 @@ def run(config_path: str, data_dir: str) -> int:
             for e in events:
                 tags = f" [{', '.join(e.exclusivity)}]" if e.exclusivity else ""
                 log.info("  %-16s %s%s %s", e.type, e.title, tags, e.detail)
+
+            if notifier and events:
+                try:
+                    sent = notifier.send_events(events, store.get("name", store["id"]))
+                    log.info("%s: %d eventos notificados", store["id"], sent)
+                except Exception as exc:  # un fallo de FCM no debe perder los datos ya guardados
+                    log.error("%s: error al notificar: %s", store["id"], exc)
 
     return 1 if failures else 0
 

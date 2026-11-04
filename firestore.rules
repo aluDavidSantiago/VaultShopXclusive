@@ -12,6 +12,15 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+    // Dispositivos suscritos a notificaciones: cualquiera puede registrar el suyo,
+    // nadie puede leer ni borrar los de otros.
+    match /subscribers/{token} {
+      allow create, update: if token.size() > 100 && token.size() < 500
+        && request.resource.data.keys().hasOnly(['created_at', 'ua'])
+        && request.resource.data.ua is string
+        && request.resource.data.ua.size() <= 250;
+      allow read, delete: if false;
+    }
     match /{document=**} {
       allow read, write: if false;
     }

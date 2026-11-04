@@ -8,3 +8,7 @@ export const firebaseConfig = {
   messagingSenderId: "214096197908",
   appId: "1:214096197908:web:164dc6a32ba698e302ea01",
 };
+
+// Clave pública VAPID para notificaciones push (Configuración del proyecto →
+// Cloud Messaging → Certificados push web). También es pública.
+export const vapidKey = "";

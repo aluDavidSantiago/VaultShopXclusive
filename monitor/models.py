@@ -56,6 +56,7 @@ class Event:
     url: str
     detail: str = ""
     exclusivity: list[str] = field(default_factory=list)
+    image: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

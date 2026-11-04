@@ -4,6 +4,12 @@ name: Monitor
 # y también a mano desde la pestaña Actions.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Qué ejecutar"
+        type: choice
+        default: monitor
+        options: [monitor, notificacion-de-prueba]
   schedule:
     - cron: "*/20 * * * *"
 
@@ -22,6 +28,11 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m monitor.main
+      - if: inputs.mode != 'notificacion-de-prueba'
+        run: python -m monitor.main
+        env:
+          FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
+      - if: inputs.mode == 'notificacion-de-prueba'
+        run: python -m monitor.notify --test
         env:
           FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}

@@ -1,10 +1,14 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import {
-  getFirestore, collection, query, orderBy, limit, onSnapshot,
+  getFirestore, collection, query, orderBy, limit, onSnapshot, doc, setDoc, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js";
+import {
+  getMessaging, getToken, isSupported, onMessage,
+} from "https://www.gstatic.com/firebasejs/11.0.2/firebase-messaging.js";
+import { firebaseConfig, vapidKey } from "./firebase-config.js";
 
-const db = getFirestore(initializeApp(firebaseConfig));
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
 const EVENT_LABELS = {
   new_product: "Nuevo",
@@ -117,3 +121,79 @@ onSnapshot(query(collection(db, "events"), orderBy("ts", "desc"), limit(50)), (s
 for (const id of ["search", "filter-tag", "filter-stock"]) $(id).addEventListener("input", renderProducts);
 renderProducts();
 renderEvents();
+
+// ---------- Notificaciones push (Firebase Cloud Messaging) ----------
+
+const TOKEN_KEY = "vsx-push-token";
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+
+function notifyMsg(text, isError = false) {
+  const el = $("notify-msg");
+  el.hidden = !text;
+  el.textContent = text || "";
+  el.className = `notice ${isError ? "error" : ""}`;
+}
+
+function markEnabled() {
+  const btn = $("notify-btn");
+  btn.textContent = "🔔 Notificaciones activadas";
+  btn.classList.add("on");
+}
+
+function readToken() {
+  try { return localStorage.getItem(TOKEN_KEY); } catch { return null; }
+}
+
+function saveToken(token) {
+  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* sin almacenamiento: no pasa nada */ }
+}
+
+async function enableNotifications() {
+  const btn = $("notify-btn");
+  if (isIOS && !isStandalone) {
+    notifyMsg("En iPhone: pulsa Compartir → \"Añadir a pantalla de inicio\", abre la web desde ese icono y vuelve a pulsar el botón.");
+    return;
+  }
+  if (!vapidKey) {
+    notifyMsg("Falta configurar la clave VAPID en firebase-config.js.", true);
+    return;
+  }
+  if (!(await isSupported())) {
+    notifyMsg("Este navegador no admite notificaciones push. Prueba con Chrome.", true);
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      notifyMsg("Has bloqueado las notificaciones. Actívalas en los ajustes del sitio del navegador y vuelve a intentarlo.", true);
+      return;
+    }
+    const registration = await navigator.serviceWorker.register("firebase-messaging-sw.js");
+    await navigator.serviceWorker.ready;
+    const token = await getToken(getMessaging(app), { vapidKey, serviceWorkerRegistration: registration });
+    await setDoc(doc(db, "subscribers", token), { created_at: serverTimestamp(), ua: navigator.userAgent.slice(0, 250) });
+    saveToken(token);
+    markEnabled();
+    notifyMsg("¡Listo! Te avisaremos de restocks y productos exclusivos aunque tengas la web cerrada.");
+  } catch (err) {
+    console.error(err);
+    notifyMsg(`No se pudieron activar: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("notify-btn").addEventListener("click", enableNotifications);
+
+if (readToken() && "Notification" in window && Notification.permission === "granted") {
+  markEnabled();
+  // Con la web abierta, FCM no muestra la notificación: la mostramos nosotros.
+  isSupported().then((ok) => ok && onMessage(getMessaging(app), async ({ notification, fcmOptions }) => {
+    const reg = await navigator.serviceWorker.getRegistration();
+    reg?.showNotification(notification?.title || "VaultShopXclusive", {
+      body: notification?.body, icon: "icon-192.png", image: notification?.image, data: { url: fcmOptions?.link },
+    });
+  }));
+}
