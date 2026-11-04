@@ -11,7 +11,7 @@ import yaml
 
 from monitor.adapters import ADAPTERS
 from monitor.detector import detect_changes
-from monitor.storage import LocalStorage
+from monitor.storage import open_storage
 
 log = logging.getLogger("monitor")
 
@@ -20,7 +20,7 @@ def run(config_path: str, data_dir: str) -> int:
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
     user_agent = config["user_agent"]
-    storage = LocalStorage(data_dir)
+    storage = open_storage(data_dir)
     failures = 0
 
     with httpx.Client(headers={"User-Agent": user_agent}, timeout=20, follow_redirects=True) as client:
@@ -40,7 +40,7 @@ def run(config_path: str, data_dir: str) -> int:
             new = {p.id: p for p in products}
             old = storage.load_state(store["id"])
             events = detect_changes(old, new)
-            storage.save_state(store["id"], new)
+            storage.save_state(store["id"], new, old)
             storage.append_snapshot(store["id"], new)
             storage.append_events(events)
 
