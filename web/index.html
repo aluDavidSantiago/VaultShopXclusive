@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VaultShopXclusive</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="dot" id="live-dot"></span>
+      <h1>VaultShop<span>X</span>clusive</h1>
+    </div>
+    <p class="status" id="status">Conectando…</p>
+  </header>
+
+  <main>
+    <section class="stats" id="stats">
+      <div class="stat"><b id="stat-total">–</b><span>productos</span></div>
+      <div class="stat"><b id="stat-available">–</b><span>en stock</span></div>
+      <div class="stat"><b id="stat-exclusive">–</b><span>exclusivos</span></div>
+      <div class="stat"><b id="stat-events">–</b><span>eventos recientes</span></div>
+    </section>
+
+    <div class="layout">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Catálogo</h2>
+          <div class="filters">
+            <input type="search" id="search" placeholder="Buscar…">
+            <select id="filter-tag">
+              <option value="">Todas las etiquetas</option>
+              <option value="vault">Vault</option>
+              <option value="limited">Limited</option>
+              <option value="special_finish">Acabado especial</option>
+              <option value="collab">Collab</option>
+              <option value="short_run">Tirada corta</option>
+            </select>
+            <label class="check"><input type="checkbox" id="filter-stock"> Solo en stock</label>
+          </div>
+        </div>
+        <div class="grid" id="products"></div>
+      </section>
+
+      <aside class="panel feed">
+        <div class="panel-head"><h2>Actividad</h2></div>
+        <ol id="events"></ol>
+      </aside>
+    </div>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
