@@ -17,6 +17,10 @@ concurrency:
   group: monitor
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write # para el paso que mantiene vivo el cron
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -40,3 +44,12 @@ jobs:
         run: python -m monitor.notify --test
         env:
           FIREBASE_CREDENTIALS: ${{ secrets.FIREBASE_CREDENTIALS }}
+      # GitHub pausa los cron tras 60 días sin actividad en el repo. Una vez al día
+      # se vuelve a activar el workflow por la API (sin commits) para que nunca se pare.
+      - if: github.event_name == 'schedule' && github.event.schedule == '7,27,47 * * * *'
+        run: |
+          if [ "$(date -u +%H%M)" -lt "0030" ]; then
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/monitor.yml/enable" && echo "cron mantenido activo"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
