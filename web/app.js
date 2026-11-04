@@ -30,7 +30,7 @@ const EXCLUSIVE = new Set(["vault", "limited", "special_finish", "collab"]);
 const exclusiveScore = (p) => (p.exclusivity || []).filter((t) => EXCLUSIVE.has(t)).length;
 
 const $ = (id) => document.getElementById(id);
-const state = { products: [], events: [], uid: null, ratings: {}, profile: null, tag: "", loaded: false };
+const state = { products: [], events: [], uid: null, ratings: {}, ratingDocs: {}, tag: "", loaded: false };
 
 // ---------- Sin zoom (pinza, doble toque, Ctrl+rueda, Ctrl +/-) ----------
 for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
@@ -87,7 +87,8 @@ function timeAgo(date) {
 
 const NOISE_TAGS = /^(hover\d*|paid|new ?in.*|new|ss\d+|fw\d+|fall\d+|\d+%off|\d+-dto|ea#.*|.*drop.*|backinstock|bestseller.*|coldfam|regular)$/;
 const NOISE_WORDS = new Set(["and", "the", "with", "for", "man", "woman", "cold", "culture"]);
-const PRICE_BUCKETS = [[30, "<30"], [60, "30-60"], [100, "60-100"], [Infinity, "100+"]];
+const STYLE_LABELS = new Set(["vault", "limited", "special_finish", "collab"]);
+const PRIOR = 1.5;
 const MIN_RATINGS = 5;
 const NOTIFY_THRESHOLD = 4.0;
 
@@ -101,22 +102,42 @@ function features(p) {
     t = t.trim().toLowerCase();
     if (t && !NOISE_TAGS.test(t)) f.add("tag:" + t);
   }
-  for (const l of p.exclusivity || []) f.add("label:" + l);
-  const price = Number(p.min_price || 0);
-  if (price) f.add("price:" + PRICE_BUCKETS.find(([lim]) => price < lim)[1]);
-  return [...f];
+  for (const l of p.exclusivity || []) if (STYLE_LABELS.has(l)) f.add("label:" + l);
+  return f;
 }
 
-const profileReady = () => (state.profile?.n_ratings || 0) >= MIN_RATINGS;
-
-function predict(p) {
-  const { weights = {}, counts = {} } = state.profile || {};
-  const known = features(p).filter((f) => f in weights);
-  if (!known.length) return null;
-  const total = known.reduce((s, f) => s + counts[f], 0);
-  const score = 3 + (known.reduce((s, f) => s + weights[f] * counts[f], 0) / total) * 2;
-  return Math.max(1, Math.min(5, score));
+// Se reconstruye cuando cambian el catálogo o las valoraciones.
+let model = null;
+function buildModel() {
+  const df = new Map();
+  for (const p of state.products) for (const f of features(p)) df.set(f, (df.get(f) || 0) + 1);
+  const n = state.products.length;
+  const idf = (f) => Math.log((n + 1) / ((df.get(f) || 0) + 1)) + 1;
+  const vector = (p) => {
+    const v = new Map([...features(p)].map((f) => [f, idf(f)]));
+    const norm = Math.sqrt([...v.values()].reduce((s, w) => s + w * w, 0)) || 1;
+    for (const [f, w] of v) v.set(f, w / norm);
+    return v;
+  };
+  const rated = Object.values(state.ratingDocs).map((r) => [vector(r), r.stars]);
+  model = {
+    rated,
+    predict(p) {
+      const v = vector(p);
+      let num = 0, den = 0;
+      for (const [rv, stars] of rated) {
+        let sim = 0;
+        for (const [f, w] of v) if (rv.has(f)) sim += w * rv.get(f);
+        num += sim * (stars - 3);
+        den += sim;
+      }
+      return Math.max(1, Math.min(5, 3 + num / (den + PRIOR)));
+    },
+  };
 }
+
+const profileReady = () => Object.keys(state.ratings).length >= MIN_RATINGS;
+const predict = (p) => model.predict(p);
 
 // ---------- Render ----------
 
@@ -139,6 +160,7 @@ function renderProducts({ animate = false } = {}) {
   const onlyStock = $("filter-stock").checked;
   const sort = $("sort").value;
   const ready = profileReady();
+  if (ready) buildModel();
 
   let list = state.products
     .filter((p) => !q || p.title.toLowerCase().includes(q))
@@ -181,12 +203,10 @@ function paintStars() {
 
 function renderTaste() {
   const n = Object.keys(state.ratings).length;
-  const learned = state.profile?.n_ratings || 0;
   let text;
   if (!state.uid) text = "";
   else if (n < MIN_RATINGS) text = `Valora prendas con las estrellas para que aprenda tus gustos: ${n}/${MIN_RATINGS}. Prueba el orden "Por valorar".`;
-  else if (learned < MIN_RATINGS) text = `${n} prendas valoradas. Tu perfil se actualizará en la próxima pasada del monitor (cada ~20 min).`;
-  else text = `Perfil aprendido con ${learned} valoraciones. Te avisaré de restocks y novedades que prevea con ≥${NOTIFY_THRESHOLD}★.`;
+  else text = `Aprendiendo de ${n} valoraciones. Te avisaré de restocks y novedades que prevea con ≥${NOTIFY_THRESHOLD}★ — cuanto más valores (también lo que no te gusta), mejor.`;
   $("taste").hidden = !text;
   $("taste").textContent = text;
   $("sort").querySelector('[value="for-you"]').disabled = !profileReady();
@@ -261,18 +281,15 @@ onAuthStateChanged(auth, (user) => {
   onSnapshot(collection(db, "users", user.uid, "ratings"), (snap) => {
     const firstLoad = !state.ratingsLoaded;
     state.ratingsLoaded = true;
+    state.ratingDocs = Object.fromEntries(snap.docs.map((d) => [d.id, d.data()]));
     state.ratings = Object.fromEntries(snap.docs.map((d) => [d.id, d.data().stars]));
     renderTaste();
-    // La primera vez hay que pintar las estrellas; después basta con repintarlas.
-    if (firstLoad) renderProducts();
+    if (profileReady() && !state.sortChosen) $("sort").value = "for-you";
+    // La primera vez hay que pintar todo; después basta con repintar las estrellas
+    // (salvo en "Para ti" / "Por valorar", donde el orden depende de las valoraciones).
+    if (firstLoad || ["for-you", "unrated"].includes($("sort").value)) renderProducts();
     else paintStars();
   }, (err) => console.error("ratings", err));
-  onSnapshot(doc(db, "users", user.uid), (snap) => {
-    state.profile = snap.data()?.profile || null;
-    if (profileReady() && !state.sortChosen) $("sort").value = "for-you";
-    renderTaste();
-    renderProducts();
-  }, (err) => console.error("profile", err));
   syncSubscriber();
 });
 signInAnonymously(auth).catch((err) => {

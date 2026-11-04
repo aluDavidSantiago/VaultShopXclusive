@@ -2,8 +2,8 @@
 
 Los dispositivos se suscriben desde el dashboard (botón "Activar notificaciones"),
 que guarda su token y el uid anónimo del usuario en `subscribers`. Cada usuario
-valora prendas en `users/{uid}/ratings`; con eso se aprende su perfil de gustos
-(monitor/taste.py), que se guarda en `users/{uid}` para que la web ordene "Para ti".
+valora prendas en `users/{uid}/ratings`; con eso y el catálogo se calcula qué
+prendas le gustarán (monitor/taste.py; la web hace el mismo cálculo para "Para ti").
 
 Solo se notifican restocks y productos nuevos, y de ellos:
   - lo exclusivo (vault, limited, collab, acabado especial), siempre;
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 from monitor.classifier import classify
 from monitor.models import Event, Product
-from monitor.taste import NOTIFY_THRESHOLD, TasteProfile
+from monitor.taste import NOTIFY_THRESHOLD, TasteModel
 
 log = logging.getLogger("monitor")
 
@@ -68,7 +68,7 @@ class Alert:
         return title, body
 
 
-def pick_alerts(events: list[Event], products: dict[str, dict], profile: TasteProfile | None,
+def pick_alerts(events: list[Event], products: dict[str, dict], profile: TasteModel | None,
                 rated: dict[str, int]) -> list[Alert]:
     """Decide qué eventos notificar a un usuario.
 
@@ -87,7 +87,7 @@ def pick_alerts(events: list[Event], products: dict[str, dict], profile: TastePr
             alerts.append(Alert(e, "loved"))
         elif profile and profile.ready and (doc := products.get(e.product_id)):
             pred = profile.predict(doc)
-            if pred is not None and pred >= NOTIFY_THRESHOLD:
+            if pred >= NOTIFY_THRESHOLD:
                 alerts.append(Alert(e, "for_you", pred, tuple(profile.reasons(doc))))
     order = {"exclusive": 0, "loved": 1, "for_you": 2}
     alerts.sort(key=lambda a: (order[a.reason], -(a.stars or 0)))
@@ -117,12 +117,10 @@ class PushNotifier:
             return []
         return [{**d.to_dict(), "doc_id": d.id} for d in self.db.collection("users").document(uid).collection("ratings").stream()]
 
-    def update_profile(self, uid: str) -> tuple[TasteProfile, dict[str, int]]:
-        """Aprende el perfil del usuario, lo guarda para la web y devuelve (perfil, valoraciones por producto)."""
+    def taste(self, uid: str, catalog: list[dict]) -> tuple[TasteModel, dict[str, int]]:
+        """Modelo de gustos del usuario y sus valoraciones por producto."""
         ratings = self.ratings(uid)
-        profile = TasteProfile.learn(ratings)
-        if uid:
-            self.db.collection("users").document(uid).set({"profile": profile.to_dict()}, merge=True)
+        profile = TasteModel(ratings, catalog)
         rated = {r["doc_id"].split("_", 1)[-1]: int(r["stars"]) for r in ratings}
         return profile, rated
 
@@ -164,9 +162,10 @@ class PushNotifier:
     def notify_events(self, events: list[Event], products: dict[str, Product], store_name: str = "") -> int:
         """Actualiza los perfiles y envía a cada usuario sus avisos. Devuelve el total de avisos."""
         docs = {pid: product_doc(p) for pid, p in products.items()}
+        catalog = list(docs.values())
         total = 0
         for uid, tokens in self.subscribers().items():
-            profile, rated = self.update_profile(uid)
+            profile, rated = self.taste(uid, catalog)
             alerts = pick_alerts(events, docs, profile, rated)
             if alerts:
                 self.send_alerts(alerts, tokens, store_name)
@@ -205,12 +204,11 @@ def send_recommendations() -> int:
     products = [d.to_dict() for d in notifier.db.collection("products").stream()]
     sent = 0
     for uid, tokens in notifier.subscribers().items():
-        profile, rated = notifier.update_profile(uid)
+        profile, rated = notifier.taste(uid, products)
         if not profile.ready:
             print(f"Usuario {uid[:6] or '(sin uid)'}: {profile.n_ratings} valoraciones, necesita al menos 5")
             continue
         scored = [(profile.predict(p), p) for p in products if p.get("available") and p["id"] not in rated]
-        scored = [(s, p) for s, p in scored if s is not None]
         if not scored:
             continue
         stars, best = max(scored, key=lambda x: x[0])
@@ -228,6 +226,7 @@ def main() -> None:
     group.add_argument("--test", action="store_true")
     group.add_argument("--recommend", action="store_true")
     args = parser.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8")  # la consola de Windows no imprime "≈" ni emojis
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     sys.exit(send_test() if args.test else send_recommendations())
 

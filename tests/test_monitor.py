@@ -140,34 +140,46 @@ def doc(title, ptype="Hoodies", price=80.0, tags=(), labels=()):
     return {"title": title, "product_type": ptype, "min_price": price, "tags": list(tags), "exclusivity": list(labels)}
 
 
+CATALOG = [doc(t, ty, pr) for t, ty, pr in [
+    ("DISTRESS HOODIE BLACK", "Hoodies", 80), ("DISTRESS HOODIE GREY", "Hoodies", 80), ("DISTRESS TEE NAVY", "Tees", 40),
+    ("BASIC HOODIE BLUE", "Hoodies", 70), ("PLAIN HOODIE RED", "Hoodies", 70), ("LOGO HOODIE GREEN", "Hoodies", 70),
+    ("BASIC SOCKS WHITE", "Socks", 15), ("LOGO SOCKS BLACK", "Socks", 15), ("STRIPE SOCKS RED", "Socks", 15),
+    ("SILVER RING", "Jewelry", 30), ("GOLD CHAIN", "Jewelry", 40), ("LEATHER BELT", "Belts", 35),
+]] + [doc(f"{w} HOODIE", "Hoodies", 70) for w in ("ORBIT", "REBEL", "EXPLORE", "STORM", "AERO", "SCRIPT", "GRID", "WAVE", "FLAME", "STAR")]
+# Como en la tienda real: "hoodie" es muy común y "distress" es raro.
+
+
 def test_taste_features_skip_store_noise():
     from monitor.taste import features
-    f = features(doc("DISTRESS HOODIE GREY", tags=["hover2", "30%off", "2026julio_drop29", "hoodies", "ea#hoodies"]))
-    assert f == ["price:60-100", "tag:hoodies", "type:hoodies", "word:distress", "word:grey", "word:hoodie"]
+    f = features(doc("DISTRESS HOODIE GREY", tags=["hover2", "30%off", "2026julio_drop29", "hoodies", "ea#hoodies"], labels=["sale", "collab"]))
+    assert f == {"tag:hoodies", "type:hoodies", "word:distress", "word:grey", "word:hoodie", "label:collab"}
 
 
-def test_taste_learns_preferences():
-    from monitor.taste import TasteProfile
-    ratings = [
-        {**doc("DISTRESS HOODIE BLACK"), "stars": 5},
-        {**doc("DISTRESS HOODIE GREY"), "stars": 5},
-        {**doc("SCRIPT ZIP HOODIE"), "stars": 4},
-        {**doc("BASIC SOCKS WHITE", "Socks", 15), "stars": 1},
-        {**doc("LOGO SOCKS BLACK", "Socks", 15), "stars": 2},
-    ]
-    profile = TasteProfile.learn(ratings)
-    assert profile.ready
-    liked = profile.predict(doc("DISTRESS HOODIE NAVY"))
-    disliked = profile.predict(doc("STRIPE SOCKS RED", "Socks", 15))
-    assert liked >= 4 and disliked <= 2
-    assert '"distress"' in profile.reasons(doc("DISTRESS HOODIE NAVY"))
-    assert profile.predict(doc("UNKNOWN THING", "Rings", 0)) is None
+def test_taste_rare_features_matter_more():
+    from monitor.taste import TasteModel
+    ratings = [{**doc(f"DISTRESS HOODIE {c}"), "stars": 5} for c in ("BLACK", "GREY", "CAMO", "PINK", "NAVY")]
+    m = TasteModel(ratings, CATALOG)
+    assert m.ready
+    distress, plain, ring = (m.predict(doc(t, ty)) for t, ty in [("DISTRESS TEE NAVY", "Tees"), ("PLAIN HOODIE RED", "Hoodies"), ("SILVER RING", "Jewelry")])
+    assert distress > plain > ring
+    assert distress >= 4 > plain
+    assert ring == 3  # sin parecido: neutra
+    assert '"distress"' in m.reasons(doc("DISTRESS TEE NAVY", "Tees"))
+
+
+def test_taste_learns_dislikes():
+    from monitor.taste import TasteModel
+    ratings = [{**doc("BASIC SOCKS WHITE", "Socks", 15), "stars": 1}, {**doc("LOGO SOCKS BLACK", "Socks", 15), "stars": 1},
+               {**doc("DISTRESS HOODIE BLACK"), "stars": 5}]
+    m = TasteModel(ratings, CATALOG)
+    assert m.predict(doc("STRIPE SOCKS RED", "Socks", 15)) < 2.5
+    assert not m.ready
 
 
 def test_pick_alerts():
     from monitor.notify import pick_alerts
-    from monitor.taste import TasteProfile
-    profile = TasteProfile.learn([{**doc(f"DISTRESS HOODIE {c}"), "stars": 5} for c in "ABCDE"])
+    from monitor.taste import TasteModel
+    profile = TasteModel([{**doc(f"DISTRESS HOODIE {c}"), "stars": 5} for c in ("BLACK", "GREY", "CAMO", "PINK", "NAVY")], CATALOG)
     products = {"h": doc("DISTRESS HOODIE NAVY"), "s": doc("PLAIN SOCKS", "Socks", 10)}
     events = [
         event("restock", "DISTRESS HOODIE NAVY", pid="h"),      # le gustará
