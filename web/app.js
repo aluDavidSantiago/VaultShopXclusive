@@ -6,7 +6,7 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gsta
 import {
   getMessaging, getToken, isSupported, onMessage,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-messaging.js";
-import { firebaseConfig, vapidKey } from "./firebase-config.js";
+import { firebaseConfig, vapidKey } from "./firebase-config.js?v=__BUILD__";
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
@@ -83,6 +83,186 @@ function timeAgo(date) {
   return date.toLocaleDateString("es-ES", { day: "numeric", month: "short" });
 }
 
+// ---------- Actualización automática (sin reinstalar la app) ----------
+// El despliegue sustituye __BUILD__ por la versión y publica version.json.
+const BUILD = document.querySelector('meta[name="build"]')?.content || "__BUILD__";
+
+async function checkForUpdate() {
+  if (BUILD.startsWith("__")) return; // en local no hay versión
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: "no-store" });
+    const { version } = await res.json();
+    if (!version || version === BUILD) {
+      sessionStorage.removeItem("vsx-reload");
+      return;
+    }
+    // Evita bucles si la caché aún sirve la versión vieja.
+    const tries = Number(sessionStorage.getItem("vsx-reload") || 0);
+    if (tries >= 2) return;
+    sessionStorage.setItem("vsx-reload", String(tries + 1));
+    toast("✨ Nueva versión, actualizando…");
+    const reg = await navigator.serviceWorker?.getRegistration();
+    await reg?.update().catch(() => {});
+    setTimeout(() => location.reload(), 700);
+  } catch { /* sin red: ya se comprobará luego */ }
+}
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("firebase-messaging-sw.js").catch((err) => console.error("sw", err));
+}
+checkForUpdate();
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkForUpdate(); });
+
+// ---------- Scroll: portada, sección anclada y revelados ----------
+const motion = !!window.gsap && !!window.ScrollTrigger && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+if (motion) {
+  document.documentElement.classList.add("anim");
+  gsap.registerPlugin(ScrollTrigger);
+  ScrollTrigger.config({ ignoreMobileResize: true });
+}
+let refreshTimer;
+function refreshScroll() {
+  if (!motion) return;
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => ScrollTrigger.refresh(), 120);
+}
+
+// Barra de progreso
+(function progressBar() {
+  const bar = $("progress");
+  let ticking = false;
+  addEventListener("scroll", () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      const max = document.documentElement.scrollHeight - innerHeight;
+      bar.style.transform = `scaleX(${max > 0 ? scrollY / max : 0})`;
+      ticking = false;
+    });
+  }, { passive: true });
+})();
+
+// Revelado de secciones y tarjetas al entrar en pantalla
+const revealer = "IntersectionObserver" in window ? new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    e.target.classList.add("in");
+    e.target.classList.remove("pre");
+    revealer.unobserve(e.target);
+  }
+}, { rootMargin: "0px 0px -8% 0px", threshold: 0 }) : null; // 0: el catálogo es muy alto y nunca llegaría a un % visible
+
+function observeCards() {
+  if (!revealer) return;
+  document.querySelectorAll("#products .card.pre").forEach((c) => revealer.observe(c));
+  refreshScroll();
+}
+if (motion && revealer) document.querySelectorAll(".reveal").forEach((el) => revealer.observe(el));
+
+// Portada: título letra a letra al entrar; al hacer scroll el collage se endereza y el texto se va.
+// Cada letra va en dos capas: .rise (entrada al cargar) y .char (salida con el scroll).
+// Así las dos animaciones no se pisan.
+function splitChars(el) {
+  for (const line of el.querySelectorAll(".line")) {
+    line.innerHTML = [...line.textContent].map((c) =>
+      `<span class="rise"><span class="char">${c === " " ? "&nbsp;" : esc(c)}</span></span>`).join("");
+  }
+}
+if (motion) {
+  splitChars($("hero-title"));
+  gsap.from("#hero-title .rise", { yPercent: 110, opacity: 0, duration: 1.1, ease: "power4.out", stagger: 0.035, delay: 0.15 });
+  gsap.from(["#hero-kicker", "#hero-sub", "#hero-scroll"], { y: 24, opacity: 0, duration: 1, ease: "power3.out", stagger: 0.12, delay: 0.6 });
+  gsap.from("#stats .stat", {
+    y: 50, opacity: 0, duration: 0.9, ease: "power3.out", stagger: 0.1,
+    scrollTrigger: { trigger: "#stats", start: "top 88%" },
+  });
+
+  const tl = gsap.timeline({
+    scrollTrigger: { trigger: "#hero", start: "top top", end: "+=110%", scrub: 0.8, pin: ".hero-stage", anticipatePin: 1 },
+  });
+  // Kicker, subtítulo y "Desliza" van dentro de .hero-fade (la entrada anima los hijos, el scroll el contenedor).
+  tl.to("#hero-collage", { rotate: 0, scale: 0.82, ease: "none" }, 0)
+    .to("#hero-title .line:first-child .char", { yPercent: -120, opacity: 0, stagger: 0.02, ease: "power2.in" }, 0.05)
+    .to("#hero-title .line:last-child .char", { yPercent: 120, opacity: 0, stagger: 0.02, ease: "power2.in" }, 0.05)
+    .to(".hero-fade", { opacity: 0, y: -30, ease: "power1.in" }, 0)
+    .to(".hero-shade", { opacity: 0.55, ease: "none" }, 0);
+}
+$("hero-scroll").addEventListener("click", () => $("stats").scrollIntoView({ behavior: "smooth", block: "start" }));
+
+// Collage con fotos del catálogo (exclusivos primero)
+let heroFilled = false;
+function renderHero() {
+  if (heroFilled || !state.products.length) return;
+  const withImg = state.products.filter((p) => p.image && p.available);
+  const pick = [...withImg.filter((p) => exclusiveScore(p)), ...withImg.filter((p) => !exclusiveScore(p))].slice(0, 16);
+  $("hero-collage").innerHTML = pick.map((p) =>
+    `<figure><img src="${esc(thumb(p.image))}" alt="" decoding="async"></figure>`).join("");
+  heroFilled = true;
+  if (motion) {
+    gsap.from("#hero-collage figure", { opacity: 0, scale: 0.85, duration: 1.2, ease: "power3.out", stagger: { each: 0.05, from: "center" } });
+    // Cada foto se desplaza a su ritmo: efecto de profundidad.
+    gsap.utils.toArray("#hero-collage figure").forEach((fig, i) => {
+      gsap.to(fig, {
+        yPercent: (i % 3 - 1) * 22, ease: "none",
+        scrollTrigger: { trigger: "#hero", start: "top top", end: "+=110%", scrub: 1 },
+      });
+    });
+  }
+  refreshScroll();
+}
+
+// Sección anclada: "Para ti" si ya aprendió tus gustos; si no, exclusivos en stock.
+let featuredTween = null;
+let featuredKey = "";
+function renderFeatured() {
+  if (!state.products.length) return;
+  const ready = profileReady();
+  if (ready) buildModel();
+  let items = [];
+  if (ready) {
+    items = state.products.filter((p) => p.available && p.image && !state.ratings[p.docId])
+      .map((p) => ({ p, s: predict(p) })).filter(({ s }) => s >= 3.6).sort((a, b) => b.s - a.s).slice(0, 10);
+  }
+  const forYou = ready && items.length >= 3;
+  if (!forYou) {
+    items = state.products.filter((p) => p.available && p.image && exclusiveScore(p)).slice(0, 10).map((p) => ({ p, s: null }));
+  }
+  const key = (forYou ? "y" : "x") + items.map(({ p }) => p.docId).join();
+  if (key === featuredKey) return;
+  featuredKey = key;
+
+  $("featured").hidden = items.length < 3;
+  if (items.length < 3) { refreshScroll(); return; }
+  $("featured-kicker").textContent = forYou ? "Seleccionado para ti" : "Lo más especial ahora";
+  $("featured-title").textContent = forYou ? "Para ti" : "Exclusivos";
+  $("featured-track").innerHTML = items.map(({ p, s }, i) => `
+    <a class="feature-card" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">
+      <img src="${esc(thumb(p.image))}" alt="" loading="lazy" decoding="async">
+      <span class="fc-num">${String(i + 1).padStart(2, "0")}</span>
+      ${s !== null ? `<span class="for-you fc-score">✨ ${s.toFixed(1)}★</span>` : ""}
+      <div class="fc-body">
+        <div class="tags">${tagsHtml(p.exclusivity)}</div>
+        <div class="fc-title">${esc(p.title)}</div>
+        <div class="fc-meta"><span>${Number(p.min_price || 0).toFixed(2)} €</span><span>${((n) => `${n} talla${n === 1 ? "" : "s"}`)((p.variants || []).filter((v) => v.available).length)}</span></div>
+      </div>
+    </a>`).join("");
+
+  if (!motion) return;
+  featuredTween?.scrollTrigger?.kill();
+  featuredTween?.kill();
+  const track = $("featured-track");
+  const distance = () => Math.max(0, track.scrollWidth - innerWidth);
+  featuredTween = gsap.to(track, {
+    x: () => -distance(), ease: "none",
+    scrollTrigger: {
+      trigger: "#featured", start: "top top", end: () => "+=" + distance(),
+      pin: ".featured-pin", scrub: 0.8, invalidateOnRefresh: true, anticipatePin: 1,
+    },
+  });
+  gsap.from(".featured-title", { yPercent: 60, opacity: 0, duration: 1, ease: "power3.out", scrollTrigger: { trigger: "#featured", start: "top 75%" } });
+  gsap.from(".feature-card", { opacity: 0, y: 60, rotate: 3, duration: 0.9, ease: "power3.out", stagger: 0.08, scrollTrigger: { trigger: "#featured", start: "top 70%" } });
+  refreshScroll();
+}
+
 // ---------- Modelo de gustos (réplica de monitor/taste.py) ----------
 
 const NOISE_TAGS = /^(hover\d*|paid|new ?in.*|new|ss\d+|fw\d+|fall\d+|\d+%off|\d+-dto|ea#.*|.*drop.*|backinstock|bestseller.*|coldfam|regular)$/;
@@ -154,7 +334,6 @@ const SKELETON = Array.from({ length: 8 }, () => `
 // `animate`: solo cuando el usuario cambia filtros; las actualizaciones de datos no deben hacer parpadear la lista.
 function renderProducts({ animate = false } = {}) {
   if (!state.loaded) { $("products").innerHTML = SKELETON; return; }
-  $("products").classList.toggle("static", !animate);
   const q = $("search").value.trim().toLowerCase();
   const tag = state.tag;
   const onlyStock = $("filter-stock").checked;
@@ -177,7 +356,7 @@ function renderProducts({ animate = false } = {}) {
 
   $("products").innerHTML = list.length
     ? list.map(({ p, pred }, i) => `
-      <div class="card ${p.available ? "" : "out"} ${exclusiveScore(p) ? "excl" : ""}" style="--i:${i}">
+      <div class="card ${p.available ? "" : "out"} ${exclusiveScore(p) ? "excl" : ""} ${animate && motion ? "pre" : ""}" style="--d:${i % 4}">
         <a href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener" class="img-link">
           ${p.image ? `<img src="${esc(thumb(p.image))}" alt="" loading="lazy" decoding="async" class="loading" onload="this.classList.remove('loading')" onerror="this.classList.remove('loading')">` : ""}
           ${pred !== null && pred >= NOTIFY_THRESHOLD ? `<span class="for-you">✨ ${pred.toFixed(1)}★</span>` : ""}
@@ -191,6 +370,8 @@ function renderProducts({ animate = false } = {}) {
         </div>
       </div>`).join("")
     : `<p class="empty">${state.products.length ? "Ningún producto coincide con los filtros." : "Aún no hay productos. Aparecerán cuando el monitor haga su primera lectura."}</p>`;
+  if (animate && motion) observeCards();
+  else refreshScroll();
 }
 
 // Actualiza las estrellas sin volver a pintar la lista.
@@ -259,6 +440,8 @@ onSnapshot(collection(db, "products"), (snap) => {
   setStatus(last ? `En directo · último cambio ${timeAgo(last)}` : "En directo", "live");
   renderProducts({ animate: first });
   renderStats();
+  renderHero();
+  renderFeatured();
 }, onError);
 
 onSnapshot(query(collection(db, "events"), orderBy("ts", "desc"), limit(50)), (snap) => {
@@ -317,8 +500,9 @@ onAuthStateChanged(auth, (user) => {
     if (profileReady() && !state.sortChosen) $("sort").value = "for-you";
     // La primera vez hay que pintar todo; después basta con repintar las estrellas
     // (salvo en "Para ti" / "Por valorar", donde el orden depende de las valoraciones).
-    if (firstLoad || ["for-you", "unrated"].includes($("sort").value)) renderProducts();
+    if (firstLoad || ["for-you", "unrated"].includes($("sort").value)) renderProducts({ animate: firstLoad });
     else paintStars();
+    renderFeatured();
   }, (err) => console.error("ratings", err));
   syncSubscriber();
 });
@@ -373,7 +557,8 @@ function notifyMsg(text, isError = false) {
 
 function markEnabled() {
   const btn = $("notify-btn");
-  btn.textContent = "🔔 Notificaciones activadas";
+  btn.querySelector(".lbl").textContent = "Notificaciones activadas";
+  btn.setAttribute("aria-label", "Notificaciones activadas");
   btn.classList.add("on");
 }
 
