@@ -1,7 +1,8 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
 import {
-  getFirestore, collection, query, orderBy, limit, onSnapshot, doc, setDoc, serverTimestamp,
+  getFirestore, collection, query, orderBy, limit, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
 import {
   getMessaging, getToken, isSupported, onMessage,
 } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-messaging.js";
@@ -9,6 +10,7 @@ import { firebaseConfig, vapidKey } from "./firebase-config.js";
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
 
 const EVENT_LABELS = {
   new_product: "Nuevo",
@@ -28,14 +30,49 @@ const EXCLUSIVE = new Set(["vault", "limited", "special_finish", "collab"]);
 const exclusiveScore = (p) => (p.exclusivity || []).filter((t) => EXCLUSIVE.has(t)).length;
 
 const $ = (id) => document.getElementById(id);
-const state = { products: [], events: [] };
+const state = { products: [], events: [], uid: null, ratings: {}, profile: null, tag: "", loaded: false };
+
+// ---------- Sin zoom (pinza, doble toque, Ctrl+rueda, Ctrl +/-) ----------
+for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+  document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+}
+document.addEventListener("touchmove", (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+document.addEventListener("dblclick", (e) => e.preventDefault(), { passive: false });
+addEventListener("wheel", (e) => { if (e.ctrlKey || e.metaKey) e.preventDefault(); }, { passive: false });
+addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && ["+", "-", "=", "0"].includes(e.key)) e.preventDefault();
+});
+
+// ---------- Pequeñas animaciones ----------
+function countUp(el, to) {
+  const from = Number(el.dataset.v || 0);
+  el.dataset.v = to;
+  if (from === to) { el.textContent = to; return; }
+  const start = performance.now();
+  const dur = 900;
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / dur);
+    el.textContent = Math.round(from + (to - from) * (1 - (1 - t) ** 3));
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+let toastTimer;
+function toast(text) {
+  const el = $("toast");
+  el.textContent = text;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 2200);
+}
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? u : "#");
 const tagsHtml = (tags = []) => tags.map((t) => `<span class="tag ${esc(t)}">${esc(TAG_LABELS[t] || t)}</span>`).join("");
 // Shopify sirve miniaturas con ?width=N; así no descargamos la imagen original.
 const thumb = (u) => (safeUrl(u) === "#" ? "#" : `${u}${u.includes("?") ? "&" : "?"}width=400`);
-const toDate =(ts) => (ts?.toDate ? ts.toDate() : ts ? new Date(ts) : null);
+const toDate = (ts) => (ts?.toDate ? ts.toDate() : ts ? new Date(ts) : null);
 
 function timeAgo(date) {
   if (!date) return "";
@@ -46,29 +83,113 @@ function timeAgo(date) {
   return date.toLocaleDateString("es-ES", { day: "numeric", month: "short" });
 }
 
-function renderProducts() {
-  const q = $("search").value.trim().toLowerCase();
-  const tag = $("filter-tag").value;
-  const onlyStock = $("filter-stock").checked;
+// ---------- Modelo de gustos (réplica de monitor/taste.py) ----------
 
-  const list = state.products
+const NOISE_TAGS = /^(hover\d*|paid|new ?in.*|new|ss\d+|fw\d+|fall\d+|\d+%off|\d+-dto|ea#.*|.*drop.*|backinstock|bestseller.*|coldfam|regular)$/;
+const NOISE_WORDS = new Set(["and", "the", "with", "for", "man", "woman", "cold", "culture"]);
+const PRICE_BUCKETS = [[30, "<30"], [60, "30-60"], [100, "60-100"], [Infinity, "100+"]];
+const MIN_RATINGS = 5;
+const NOTIFY_THRESHOLD = 4.0;
+
+function features(p) {
+  const f = new Set();
+  if (p.product_type) f.add("type:" + p.product_type.trim().toLowerCase());
+  for (const w of (p.title || "").toLowerCase().match(/[a-záéíóúñ0-9]+/g) || []) {
+    if (w.length >= 3 && !NOISE_WORDS.has(w)) f.add("word:" + w);
+  }
+  for (let t of p.tags || []) {
+    t = t.trim().toLowerCase();
+    if (t && !NOISE_TAGS.test(t)) f.add("tag:" + t);
+  }
+  for (const l of p.exclusivity || []) f.add("label:" + l);
+  const price = Number(p.min_price || 0);
+  if (price) f.add("price:" + PRICE_BUCKETS.find(([lim]) => price < lim)[1]);
+  return [...f];
+}
+
+const profileReady = () => (state.profile?.n_ratings || 0) >= MIN_RATINGS;
+
+function predict(p) {
+  const { weights = {}, counts = {} } = state.profile || {};
+  const known = features(p).filter((f) => f in weights);
+  if (!known.length) return null;
+  const total = known.reduce((s, f) => s + counts[f], 0);
+  const score = 3 + (known.reduce((s, f) => s + weights[f] * counts[f], 0) / total) * 2;
+  return Math.max(1, Math.min(5, score));
+}
+
+// ---------- Render ----------
+
+function starsHtml(p) {
+  const mine = state.ratings[p.docId] || 0;
+  return `<div class="stars" role="group" aria-label="Valorar">${[1, 2, 3, 4, 5].map((n) =>
+    `<button type="button" data-rate="${n}" data-doc="${esc(p.docId)}" class="${n <= mine ? "on" : ""}" aria-label="${n} estrellas">★</button>`).join("")}</div>`;
+}
+
+const SKELETON = Array.from({ length: 8 }, () => `
+  <div class="card skeleton"><div class="img-link"></div>
+    <div class="body"><div class="line"></div><div class="line short"></div></div></div>`).join("");
+
+// `animate`: solo cuando el usuario cambia filtros; las actualizaciones de datos no deben hacer parpadear la lista.
+function renderProducts({ animate = false } = {}) {
+  if (!state.loaded) { $("products").innerHTML = SKELETON; return; }
+  $("products").classList.toggle("static", !animate);
+  const q = $("search").value.trim().toLowerCase();
+  const tag = state.tag;
+  const onlyStock = $("filter-stock").checked;
+  const sort = $("sort").value;
+  const ready = profileReady();
+
+  let list = state.products
     .filter((p) => !q || p.title.toLowerCase().includes(q))
     .filter((p) => !tag || (p.exclusivity || []).includes(tag))
     .filter((p) => !onlyStock || p.available)
-    .sort((a, b) => exclusiveScore(b) - exclusiveScore(a) || Number(b.available) - Number(a.available) || (b.drop || "").localeCompare(a.drop || "", undefined, { numeric: true }));
+    .map((p) => ({ p, pred: ready ? predict(p) : null }));
+
+  const byDrop = (a, b) => (b.p.drop || "").localeCompare(a.p.drop || "", undefined, { numeric: true });
+  const byExclusive = (a, b) => exclusiveScore(b.p) - exclusiveScore(a.p) || Number(b.p.available) - Number(a.p.available) || byDrop(a, b);
+  if (sort === "for-you" && ready) list.sort((a, b) => (b.pred ?? 0) - (a.pred ?? 0) || byExclusive(a, b));
+  else if (sort === "unrated") list = list.filter(({ p }) => !state.ratings[p.docId]).sort(byDrop);
+  else if (sort === "new") list.sort(byDrop);
+  else list.sort(byExclusive);
 
   $("products").innerHTML = list.length
-    ? list.map((p) => `
-      <a class="card ${p.available ? "" : "out"}" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">
-        ${p.image ? `<img src="${esc(thumb(p.image))}" alt="" loading="lazy">` : `<img alt="">`}
+    ? list.map(({ p, pred }, i) => `
+      <div class="card ${p.available ? "" : "out"} ${exclusiveScore(p) ? "excl" : ""}" style="--i:${i}">
+        <a href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener" class="img-link">
+          ${p.image ? `<img src="${esc(thumb(p.image))}" alt="" loading="lazy" decoding="async" class="loading" onload="this.classList.remove('loading')" onerror="this.classList.remove('loading')">` : ""}
+          ${pred !== null && pred >= NOTIFY_THRESHOLD ? `<span class="for-you">✨ ${pred.toFixed(1)}★</span>` : ""}
+        </a>
         <div class="body">
           <div class="tags">${tagsHtml(p.exclusivity)}</div>
-          <div class="title">${esc(p.title)}</div>
+          <a class="title" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">${esc(p.title)}</a>
           <div class="sizes">${(p.variants || []).map((v) => `<span class="size ${v.available ? "on" : "off"}">${esc(v.title)}</span>`).join("")}</div>
           <div class="meta"><span class="price">${Number(p.min_price || 0).toFixed(2)} €</span><span>${p.drop ? `${esc(p.drop)} · ` : ""}${p.available ? "En stock" : "Agotado"}</span></div>
+          ${state.uid ? starsHtml(p) : ""}
         </div>
-      </a>`).join("")
+      </div>`).join("")
     : `<p class="empty">${state.products.length ? "Ningún producto coincide con los filtros." : "Aún no hay productos. Aparecerán cuando el monitor haga su primera lectura."}</p>`;
+}
+
+// Actualiza las estrellas sin volver a pintar la lista.
+function paintStars() {
+  for (const group of document.querySelectorAll(".stars")) {
+    const mine = state.ratings[group.firstElementChild?.dataset.doc] || 0;
+    group.querySelectorAll("button").forEach((b, i) => b.classList.toggle("on", i < mine));
+  }
+}
+
+function renderTaste() {
+  const n = Object.keys(state.ratings).length;
+  const learned = state.profile?.n_ratings || 0;
+  let text;
+  if (!state.uid) text = "";
+  else if (n < MIN_RATINGS) text = `Valora prendas con las estrellas para que aprenda tus gustos: ${n}/${MIN_RATINGS}. Prueba el orden "Por valorar".`;
+  else if (learned < MIN_RATINGS) text = `${n} prendas valoradas. Tu perfil se actualizará en la próxima pasada del monitor (cada ~20 min).`;
+  else text = `Perfil aprendido con ${learned} valoraciones. Te avisaré de restocks y novedades que prevea con ≥${NOTIFY_THRESHOLD}★.`;
+  $("taste").hidden = !text;
+  $("taste").textContent = text;
+  $("sort").querySelector('[value="for-you"]').disabled = !profileReady();
 }
 
 function renderEvents() {
@@ -85,10 +206,10 @@ function renderEvents() {
 }
 
 function renderStats() {
-  $("stat-total").textContent = state.products.length;
-  $("stat-available").textContent = state.products.filter((p) => p.available).length;
-  $("stat-exclusive").textContent = state.products.filter((p) => exclusiveScore(p) > 0).length;
-  $("stat-events").textContent = state.events.length;
+  countUp($("stat-total"), state.products.length);
+  countUp($("stat-available"), state.products.filter((p) => p.available).length);
+  countUp($("stat-exclusive"), state.products.filter((p) => exclusiveScore(p) > 0).length);
+  countUp($("stat-events"), state.events.length);
 }
 
 function setStatus(text, kind) {
@@ -105,10 +226,12 @@ function onError(err) {
 }
 
 onSnapshot(collection(db, "products"), (snap) => {
-  state.products = snap.docs.map((d) => d.data());
+  state.products = snap.docs.map((d) => ({ ...d.data(), docId: d.id }));
+  const first = !state.loaded;
+  state.loaded = true;
   const last = state.products.map((p) => toDate(p.updated_at)).filter(Boolean).sort((a, b) => b - a)[0];
   setStatus(last ? `En directo · último cambio ${timeAgo(last)}` : "En directo", "live");
-  renderProducts();
+  renderProducts({ animate: first });
   renderStats();
 }, onError);
 
@@ -118,9 +241,75 @@ onSnapshot(query(collection(db, "events"), orderBy("ts", "desc"), limit(50)), (s
   renderStats();
 }, onError);
 
-for (const id of ["search", "filter-tag", "filter-stock"]) $(id).addEventListener("input", renderProducts);
+for (const id of ["search", "filter-stock", "sort"]) $(id).addEventListener("input", () => renderProducts({ animate: true }));
+$("chips").addEventListener("click", (ev) => {
+  const chip = ev.target.closest(".chip");
+  if (!chip) return;
+  state.tag = chip.dataset.tag;
+  document.querySelectorAll(".chip").forEach((c) => c.classList.toggle("active", c === chip));
+  chip.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  renderProducts({ animate: true });
+});
 renderProducts();
 renderEvents();
+
+// ---------- Usuario anónimo y valoraciones ----------
+
+onAuthStateChanged(auth, (user) => {
+  if (!user) return;
+  state.uid = user.uid;
+  onSnapshot(collection(db, "users", user.uid, "ratings"), (snap) => {
+    const firstLoad = !state.ratingsLoaded;
+    state.ratingsLoaded = true;
+    state.ratings = Object.fromEntries(snap.docs.map((d) => [d.id, d.data().stars]));
+    renderTaste();
+    // La primera vez hay que pintar las estrellas; después basta con repintarlas.
+    if (firstLoad) renderProducts();
+    else paintStars();
+  }, (err) => console.error("ratings", err));
+  onSnapshot(doc(db, "users", user.uid), (snap) => {
+    state.profile = snap.data()?.profile || null;
+    if (profileReady() && !state.sortChosen) $("sort").value = "for-you";
+    renderTaste();
+    renderProducts();
+  }, (err) => console.error("profile", err));
+  syncSubscriber();
+});
+signInAnonymously(auth).catch((err) => {
+  console.error(err);
+  $("taste").hidden = false;
+  $("taste").textContent = "No se pudo iniciar la sesión anónima: activa \"Anónimo\" en Firebase → Authentication.";
+});
+$("sort").addEventListener("change", () => { state.sortChosen = true; });
+
+$("products").addEventListener("click", async (ev) => {
+  const btn = ev.target.closest("button[data-rate]");
+  if (!btn || !state.uid) return;
+  const docId = btn.dataset.doc;
+  const stars = Number(btn.dataset.rate);
+  const p = state.products.find((x) => x.docId === docId);
+  if (!p) return;
+  const ref = doc(db, "users", state.uid, "ratings", docId);
+  btn.classList.remove("bump");
+  void btn.offsetWidth; // reinicia la animación
+  btn.classList.add("bump");
+  try {
+    if (state.ratings[docId] === stars) {
+      await deleteDoc(ref); // pulsar la misma estrella otra vez quita la valoración
+      toast("Valoración quitada");
+    } else {
+      const n = Object.keys(state.ratings).length + 1;
+      toast(`${"★".repeat(stars)} guardado` + (n < MIN_RATINGS ? ` · ${n}/${MIN_RATINGS} para aprender` : ""));
+      await setDoc(ref, {
+        stars, title: p.title, product_type: p.product_type || "", tags: (p.tags || []).slice(0, 60),
+        exclusivity: p.exclusivity || [], min_price: Number(p.min_price || 0), rated_at: serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    console.error(err);
+    toast("No se pudo guardar: " + err.message);
+  }
+});
 
 // ---------- Notificaciones push (Firebase Cloud Messaging) ----------
 
@@ -149,6 +338,27 @@ function saveToken(token) {
   try { localStorage.setItem(TOKEN_KEY, token); } catch { /* sin almacenamiento: no pasa nada */ }
 }
 
+async function registerToken() {
+  const registration = await navigator.serviceWorker.register("firebase-messaging-sw.js");
+  await navigator.serviceWorker.ready;
+  const token = await getToken(getMessaging(app), { vapidKey, serviceWorkerRegistration: registration });
+  await setDoc(doc(db, "subscribers", token), {
+    created_at: serverTimestamp(), ua: navigator.userAgent.slice(0, 250), uid: state.uid || "",
+  });
+  saveToken(token);
+  return token;
+}
+
+// Vincula este dispositivo con el usuario anónimo para recibir avisos personalizados.
+async function syncSubscriber() {
+  if (!readToken() || !("Notification" in window) || Notification.permission !== "granted") return;
+  try {
+    if (await isSupported()) await registerToken();
+  } catch (err) {
+    console.error("syncSubscriber", err);
+  }
+}
+
 async function enableNotifications() {
   const btn = $("notify-btn");
   if (isIOS && !isStandalone) {
@@ -170,13 +380,9 @@ async function enableNotifications() {
       notifyMsg("Has bloqueado las notificaciones. Actívalas en los ajustes del sitio del navegador y vuelve a intentarlo.", true);
       return;
     }
-    const registration = await navigator.serviceWorker.register("firebase-messaging-sw.js");
-    await navigator.serviceWorker.ready;
-    const token = await getToken(getMessaging(app), { vapidKey, serviceWorkerRegistration: registration });
-    await setDoc(doc(db, "subscribers", token), { created_at: serverTimestamp(), ua: navigator.userAgent.slice(0, 250) });
-    saveToken(token);
+    await registerToken();
     markEnabled();
-    notifyMsg("¡Listo! Te avisaremos de restocks y productos exclusivos aunque tengas la web cerrada.");
+    notifyMsg("¡Listo! Te avisaré de lo exclusivo y de lo que encaje con tus gustos, aunque tengas la web cerrada.");
   } catch (err) {
     console.error(err);
     notifyMsg(`No se pudieron activar: ${err.message}`, true);

@@ -1,7 +1,7 @@
 rules_version = '2';
 
-// El dashboard solo lee. Solo el monitor (con la cuenta de servicio, que
-// ignora estas reglas) puede escribir.
+// El dashboard lee el catálogo; cada usuario (anónimo) gestiona solo sus datos.
+// El monitor usa la cuenta de servicio, que ignora estas reglas.
 service cloud.firestore {
   match /databases/{database}/documents {
     match /products/{productId} {
@@ -12,15 +12,36 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
-    // Dispositivos suscritos a notificaciones: cualquiera puede registrar el suyo,
-    // nadie puede leer ni borrar los de otros.
+
+    // Dispositivos suscritos a notificaciones: cada uno registra el suyo,
+    // vinculado a su usuario anónimo. Nadie puede leer los de otros.
     match /subscribers/{token} {
-      allow create, update: if token.size() > 100 && token.size() < 500
-        && request.resource.data.keys().hasOnly(['created_at', 'ua'])
+      allow create, update: if request.auth != null
+        && token.size() > 100 && token.size() < 500
+        && request.resource.data.keys().hasOnly(['created_at', 'ua', 'uid'])
         && request.resource.data.ua is string
-        && request.resource.data.ua.size() <= 250;
+        && request.resource.data.ua.size() <= 250
+        && request.resource.data.uid == request.auth.uid;
       allow read, delete: if false;
     }
+
+    // Perfil de gustos: lo calcula el monitor, el usuario solo lo lee.
+    match /users/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+
+      // Valoraciones de 1 a 5 estrellas.
+      match /ratings/{productId} {
+        allow read, delete: if request.auth != null && request.auth.uid == uid;
+        allow create, update: if request.auth != null && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['stars', 'title', 'product_type', 'tags', 'exclusivity', 'min_price', 'rated_at'])
+          && request.resource.data.stars is int
+          && request.resource.data.stars >= 1 && request.resource.data.stars <= 5
+          && request.resource.data.title is string && request.resource.data.title.size() <= 300
+          && request.resource.data.tags is list && request.resource.data.tags.size() <= 60;
+      }
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

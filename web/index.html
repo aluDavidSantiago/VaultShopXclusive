@@ -2,67 +2,91 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>VaultShopXclusive</title>
   <meta name="description" content="Monitor en directo de restocks y productos exclusivos.">
-  <meta name="theme-color" content="#0b0b0d">
+  <meta name="theme-color" content="#08080b">
+  <meta name="color-scheme" content="dark">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon-192.png">
   <link rel="apple-touch-icon" href="icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="VaultShop">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div class="bg" aria-hidden="true"><span></span><span></span><span></span></div>
+
   <header class="top">
     <div class="brand">
       <span class="dot" id="live-dot"></span>
-      <h1>VaultShop<span>X</span>clusive</h1>
+      <h1>VaultShop<span class="x">X</span>clusive</h1>
     </div>
-    <div class="top-right">
-      <p class="status" id="status">Conectando…</p>
-      <button type="button" class="notify-btn" id="notify-btn">🔔 Activar notificaciones</button>
-    </div>
+    <p class="status" id="status">Conectando…</p>
+    <button type="button" class="notify-btn" id="notify-btn">🔔 Activar notificaciones</button>
   </header>
-  <p class="notice" id="notify-msg" hidden></p>
 
   <main>
-    <section class="stats" id="stats">
-      <div class="stat"><b id="stat-total">–</b><span>productos</span></div>
-      <div class="stat"><b id="stat-available">–</b><span>en stock</span></div>
-      <div class="stat"><b id="stat-exclusive">–</b><span>exclusivos</span></div>
-      <div class="stat"><b id="stat-events">–</b><span>eventos recientes</span></div>
+    <p class="notice" id="notify-msg" hidden></p>
+
+    <section class="stats">
+      <div class="stat" style="--c: var(--accent)"><b id="stat-total">–</b><span>Productos</span></div>
+      <div class="stat" style="--c: var(--ok)"><b id="stat-available">–</b><span>En stock</span></div>
+      <div class="stat" style="--c: var(--pink)"><b id="stat-exclusive">–</b><span>Exclusivos</span></div>
+      <div class="stat" style="--c: var(--sky)"><b id="stat-events">–</b><span>Eventos</span></div>
     </section>
 
     <div class="layout">
-      <section class="panel">
+      <section class="panel catalog">
         <div class="panel-head">
           <h2>Catálogo</h2>
-          <div class="filters">
-            <input type="search" id="search" placeholder="Buscar…">
-            <select id="filter-tag">
-              <option value="">Todas las etiquetas</option>
-              <option value="vault">Vault</option>
-              <option value="limited">Limited</option>
-              <option value="special_finish">Acabado especial</option>
-              <option value="collab">Collab</option>
-              <option value="short_run">Tirada corta</option>
-              <option value="back_in_stock">Back in stock</option>
-              <option value="bestseller">Bestseller</option>
-              <option value="sale">Rebaja</option>
-            </select>
-            <label class="check"><input type="checkbox" id="filter-stock"> Solo en stock</label>
+          <div class="tools">
+            <label class="search">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input type="search" id="search" placeholder="Buscar prenda…" autocomplete="off" enterkeyhint="search">
+            </label>
+            <div class="select">
+              <select id="sort" aria-label="Ordenar">
+                <option value="exclusive">💎 Exclusivos primero</option>
+                <option value="for-you">✨ Para ti</option>
+                <option value="new">🆕 Últimos drops</option>
+                <option value="unrated">⭐ Por valorar</option>
+              </select>
+            </div>
+            <label class="switch"><input type="checkbox" id="filter-stock"><span class="track"><span class="thumb"></span></span>En stock</label>
           </div>
         </div>
+
+        <div class="chips" id="chips" role="tablist" aria-label="Filtrar por etiqueta">
+          <button type="button" class="chip active" data-tag="">Todo</button>
+          <button type="button" class="chip vault" data-tag="vault">Vault</button>
+          <button type="button" class="chip limited" data-tag="limited">Limited</button>
+          <button type="button" class="chip collab" data-tag="collab">Collab</button>
+          <button type="button" class="chip special_finish" data-tag="special_finish">Acabado especial</button>
+          <button type="button" class="chip back_in_stock" data-tag="back_in_stock">Back in stock</button>
+          <button type="button" class="chip bestseller" data-tag="bestseller">Bestseller</button>
+          <button type="button" class="chip sale" data-tag="sale">Rebaja</button>
+          <button type="button" class="chip" data-tag="short_run">Tirada corta</button>
+        </div>
+
+        <p class="taste" id="taste" hidden></p>
         <div class="grid" id="products"></div>
       </section>
 
       <aside class="panel feed">
-        <div class="panel-head"><h2>Actividad</h2></div>
+        <div class="panel-head"><h2>Actividad</h2><span class="live-pill">LIVE</span></div>
         <ol id="events"></ol>
       </aside>
     </div>
   </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <script type="module" src="app.js"></script>
 </body>

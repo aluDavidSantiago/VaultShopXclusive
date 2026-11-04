@@ -130,43 +130,60 @@ def test_storage_roundtrip(tmp_path):
     assert storage.load_state("test") == state
 
 
-def event(type_, title="Tee", labels=()):
+
+def event(type_, title="Tee", labels=(), pid=None):
     from monitor.models import Event
-    return Event(type=type_, store_id="test", product_id=title, title=title, url="https://shop.test/p", exclusivity=list(labels))
+    return Event(type=type_, store_id="test", product_id=pid or title, title=title, url="https://shop.test/p", exclusivity=list(labels))
 
 
-def test_should_notify():
-    from monitor.notify import should_notify
-    assert should_notify(event("restock"))
-    assert should_notify(event("new_product"))
-    assert not should_notify(event("sold_out"))
-    assert should_notify(event("sold_out", labels=["vault"]))
-    assert not should_notify(event("price_change", labels=["sale"]))
+def doc(title, ptype="Hoodies", price=80.0, tags=(), labels=()):
+    return {"title": title, "product_type": ptype, "min_price": price, "tags": list(tags), "exclusivity": list(labels)}
 
 
-def test_format_event():
-    from monitor.notify import format_event
-    e = event("restock", "VAULT HOODIE", ["vault", "sale"])
-    e.detail = "tallas: S, M"
-    assert format_event(e) == ("🔁 RESTOCK · VAULT", "VAULT HOODIE\ntallas: S, M")
+def test_taste_features_skip_store_noise():
+    from monitor.taste import features
+    f = features(doc("DISTRESS HOODIE GREY", tags=["hover2", "30%off", "2026julio_drop29", "hoodies", "ea#hoodies"]))
+    assert f == ["price:60-100", "tag:hoodies", "type:hoodies", "word:distress", "word:grey", "word:hoodie"]
 
 
-def test_send_events_individual_and_summary():
-    from monitor.notify import MAX_NOTIFICATIONS, PushNotifier
+def test_taste_learns_preferences():
+    from monitor.taste import TasteProfile
+    ratings = [
+        {**doc("DISTRESS HOODIE BLACK"), "stars": 5},
+        {**doc("DISTRESS HOODIE GREY"), "stars": 5},
+        {**doc("SCRIPT ZIP HOODIE"), "stars": 4},
+        {**doc("BASIC SOCKS WHITE", "Socks", 15), "stars": 1},
+        {**doc("LOGO SOCKS BLACK", "Socks", 15), "stars": 2},
+    ]
+    profile = TasteProfile.learn(ratings)
+    assert profile.ready
+    liked = profile.predict(doc("DISTRESS HOODIE NAVY"))
+    disliked = profile.predict(doc("STRIPE SOCKS RED", "Socks", 15))
+    assert liked >= 4 and disliked <= 2
+    assert '"distress"' in profile.reasons(doc("DISTRESS HOODIE NAVY"))
+    assert profile.predict(doc("UNKNOWN THING", "Rings", 0)) is None
 
-    class FakeNotifier(PushNotifier):
-        def __init__(self):
-            self.sent = []
 
-        def send(self, title, body, link="", image=""):
-            self.sent.append((title, body, link))
-            return 1
+def test_pick_alerts():
+    from monitor.notify import pick_alerts
+    from monitor.taste import TasteProfile
+    profile = TasteProfile.learn([{**doc(f"DISTRESS HOODIE {c}"), "stars": 5} for c in "ABCDE"])
+    products = {"h": doc("DISTRESS HOODIE NAVY"), "s": doc("PLAIN SOCKS", "Socks", 10)}
+    events = [
+        event("restock", "DISTRESS HOODIE NAVY", pid="h"),      # le gustará
+        event("restock", "PLAIN SOCKS", pid="s"),               # no encaja
+        event("new_product", "VAULT JACKET", ["vault"], pid="v"),  # exclusivo: siempre
+        event("sold_out", "VAULT TEE", ["vault"], pid="t"),     # agotados: nunca
+        event("restock", "OLD FAV", pid="f"),                   # valorado 5
+        event("restock", "HATED", ["collab"], pid="x"),         # valorado 1: nunca, ni exclusivo
+    ]
+    alerts = pick_alerts(events, products, profile, {"f": 5, "x": 1})
+    assert [(a.event.product_id, a.reason) for a in alerts] == [("v", "exclusive"), ("f", "loved"), ("h", "for_you")]
+    title, body = alerts[2].format()
+    assert title.startswith("✨ Te puede gustar") and "★" in body
 
-    n = FakeNotifier()
-    assert n.send_events([event("restock", "A"), event("sold_out", "B"), event("new_product", "C", ["collab"])]) == 2
-    assert n.sent[0][0].startswith("🆕 Nuevo · COLLAB")  # los exclusivos primero
 
-    n = FakeNotifier()
-    many = [event("restock", f"P{i}") for i in range(MAX_NOTIFICATIONS + 1)]
-    assert n.send_events(many, "Cold Culture") == MAX_NOTIFICATIONS + 1
-    assert len(n.sent) == 1 and n.sent[0][0] == f"{MAX_NOTIFICATIONS + 1} cambios en Cold Culture"
+def test_pick_alerts_without_profile_only_exclusives():
+    from monitor.notify import pick_alerts
+    events = [event("restock", "A", pid="a"), event("new_product", "B", ["collab"], pid="b")]
+    assert [a.event.product_id for a in pick_alerts(events, {}, None, {})] == ["b"]

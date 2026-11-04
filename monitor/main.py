@@ -53,9 +53,9 @@ def run(config_path: str, data_dir: str) -> int:
                 tags = f" [{', '.join(e.exclusivity)}]" if e.exclusivity else ""
                 log.info("  %-16s %s%s %s", e.type, e.title, tags, e.detail)
 
-            if notifier and events:
+            if notifier:
                 try:
-                    sent = notifier.send_events(events, store.get("name", store["id"]))
+                    sent = notifier.notify_events(events, new, store.get("name", store["id"]))
                     log.info("%s: %d eventos notificados", store["id"], sent)
                 except Exception as exc:  # un fallo de FCM no debe perder los datos ya guardados
                     log.error("%s: error al notificar: %s", store["id"], exc)
